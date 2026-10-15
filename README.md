@@ -38,7 +38,8 @@ Em construção. O que já funciona:
 - [x] Codificar em H.264 pelo chip da placa e gravar em MP4
 - [x] Áudio do processo escolhido, sem o som dos outros
 - [x] Juntar imagem e som no mesmo arquivo, alinhados
-- [ ] Mandar para o site (WebRTC)
+- [x] Mandar o video por WebRTC para um navegador de verdade
+- [ ] Falar o protocolo do site (sessao do Discord e caixa postal)
 - [ ] Interface e bandeja
 
 ## O que já foi medido
@@ -69,6 +70,14 @@ milissegundos de diferença, que ninguém percebe.
 
 O custo de CPU é a prova de que quem codifica é o chip da placa: em
 software, o mesmo trabalho cobraria mais de vinte vezes isso.
+
+E a perna de rede, medida num Chrome de verdade recebendo:
+
+| | |
+|---|---|
+| Pacotes recebidos | 4896 (4,9 MB em 14s) |
+| Quadros decodificados | 302 |
+| Resolução no destino | 1296x988, a mesma que saiu do encoder |
 
 ## Compilar
 

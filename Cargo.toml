@@ -5,6 +5,23 @@ edition = "2021"
 description = "Transmissão de tela do Boteco Copo Sujo"
 
 [dependencies]
+# WebRTC em Rust. É a peça que leva o vídeo até o navegador de quem assiste,
+# sem servidor no meio e sem recodificar: o H.264 que o chip produziu vai
+# direto para a rede.
+# 0.17 e nao 0.11: a de 2024 falha o aperto de mao criptografico com Chrome
+# moderno ("invalid named curve"), porque o navegador oferece extensoes de TLS
+# 1.3 que ela nao entende. Mesma API, zero mudanca de codigo.
+#
+# E nao 0.21: aquela e uma REESCRITA da API. A 0.17.2 e a ultima da linha atual,
+# e migrar fica como item conhecido, nao como surpresa.
+webrtc = "0.17"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs"] }
+# A oferta e a resposta viajam como JSON, que e o formato que o site ja usa.
+serde_json = "1"
+# Log do WebRTC: sem ele, falha de rede aparece como a palavra "failed" e mais
+# nada, e adivinhar motivo de ICE custa horas.
+env_logger = "0.11"
+
 # As APIs do Windows em Rust. As features são escolhidas uma a uma de
 # propósito: a crate inteira é enorme, e cada módulo ligado custa tempo de
 # compilação. Este primeiro marco só precisa enumerar janelas e descobrir o

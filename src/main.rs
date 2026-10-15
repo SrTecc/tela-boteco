@@ -13,12 +13,31 @@ mod audio;
 mod captura;
 mod codificador;
 mod janelas;
+mod transmissao;
 
 fn main() {
+    // Liga com RUST_LOG=webrtc_ice=debug para ver por que uma conexao nao fecha.
+    env_logger::init();
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.is_empty() {
         listar();
+        return;
+    }
+
+    if args[0] == "--transmitir" {
+        // Teste da perna de rede: manda uma amostra de H.264 ja pronta para
+        // um navegador. Separado da captura de proposito: provar que o video
+        // CHEGA e um risco, e falar com o site da Vercel e outro. Misturar os
+        // dois faria uma falha parecer a outra.
+        let arquivo = std::path::PathBuf::from(&args[1]);
+        let pasta = std::path::PathBuf::from(&args[2]);
+        let fps: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(30);
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        if let Err(e) = rt.block_on(transmissao::transmitir_arquivo(&arquivo, &pasta, fps)) {
+            eprintln!("falhou: {e}");
+            std::process::exit(1);
+        }
         return;
     }
 
