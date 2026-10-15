@@ -37,10 +37,16 @@ Em construção. O que já funciona:
 - [x] Capturar uma janela (Windows Graphics Capture), sem passar quadro pela CPU
 - [x] Codificar em H.264 pelo chip da placa e gravar em MP4
 - [x] Áudio do processo escolhido, sem o som dos outros
-- [x] Juntar imagem e som no mesmo arquivo, alinhados
-- [x] Mandar o video por WebRTC para um navegador de verdade
+- [x] Juntar imagem e som (hoje no modo de medição, que grava arquivo)
+- [x] **Compartilhar a tela ao vivo**: captura, codifica e manda, sem arquivo no caminho
 - [ ] Falar o protocolo do site (sessao do Discord e caixa postal)
 - [ ] Interface e bandeja
+
+## O que ele é, e o que ele não é
+
+É **compartilhamento de tela ao vivo**. O modo que grava um arquivo existe
+como instrumento de medição, para responder se o chip codifica, quanto custa
+e se o som isola. Ninguém vai usá-lo para nada.
 
 ## O que já foi medido
 
@@ -78,6 +84,15 @@ E a perna de rede, medida num Chrome de verdade recebendo:
 | Pacotes recebidos | 4896 (4,9 MB em 14s) |
 | Quadros decodificados | 302 |
 | Resolução no destino | 1296x988, a mesma que saiu do encoder |
+
+E a cadeia inteira ao vivo, de uma janela até o navegador, sem arquivo:
+
+| | |
+|---|---|
+| Pacotes no destino | 747 (776 KB em 14s) |
+| Quadros decodificados | 51 |
+| Resolução | 1584x892 |
+| Codificador | Intel Quick Sync, no chip da placa |
 
 ## Compilar
 

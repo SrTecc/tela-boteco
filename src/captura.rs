@@ -74,6 +74,129 @@ impl Resultado {
     }
 }
 
+/// Captura uma janela e entrega o H.264 **em memória**, pacote a pacote.
+///
+/// É este o caminho do produto: compartilhar tela ao vivo. O caminho que grava
+/// MP4 (logo abaixo) existe como instrumento de medição, para responder se o
+/// chip codifica e quanto custa, e não para ser usado por ninguém.
+///
+/// Devolve (quadros capturados, nome do codificador, se é hardware).
+pub fn capturar_ao_vivo(
+    hwnd: isize,
+    duracao_seg: f64,
+    fps: u32,
+    bitrate: u32,
+    envio: std::sync::mpsc::Sender<Vec<u8>>,
+) -> WinResult<(u64, String, bool)> {
+    if !GraphicsCaptureSession::IsSupported()? {
+        return Err(windows::core::Error::new(
+            windows::Win32::Foundation::E_NOTIMPL,
+            "este Windows não tem Graphics Capture",
+        ));
+    }
+
+    let (d3d, contexto) = criar_dispositivo()?;
+    let dispositivo_winrt: windows::Graphics::DirectX::Direct3D11::IDirect3DDevice = unsafe {
+        let dxgi: IDXGIDevice = d3d.cast()?;
+        CreateDirect3D11DeviceFromDXGIDevice(&dxgi)?.cast()?
+    };
+
+    let interop: IGraphicsCaptureItemInterop =
+        windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
+    let item: GraphicsCaptureItem = unsafe { interop.CreateForWindow(HWND(hwnd as *mut _))? };
+    let tamanho = item.Size()?;
+
+    // Dimensão par: o H.264 amostra a cor de dois em dois pixels.
+    let largura = (tamanho.Width as u32) & !1;
+    let altura = (tamanho.Height as u32) & !1;
+
+    let codificador = Arc::new(Mutex::new(crate::vivo::Vivo::novo(
+        &d3d, &contexto, largura, altura, fps, bitrate,
+    )?));
+    let nome = codificador.lock().unwrap().nome.clone();
+    let em_hardware = codificador.lock().unwrap().em_hardware;
+
+    let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
+        &dispositivo_winrt,
+        DirectXPixelFormat::B8G8R8A8UIntNormalized,
+        2,
+        tamanho,
+    )?;
+
+    let contador = Arc::new(AtomicU64::new(0));
+    {
+        let contador = contador.clone();
+        let codificador = codificador.clone();
+        pool.FrameArrived(&TypedEventHandler::<Direct3D11CaptureFramePool, _>::new(
+            move |pool: &Option<Direct3D11CaptureFramePool>, _| {
+                let Some(pool) = pool.as_ref() else { return Ok(()) };
+                let Ok(quadro) = pool.TryGetNextFrame() else { return Ok(()) };
+                let Ok(superficie) = quadro.Surface() else { return Ok(()) };
+                let Ok(acesso) = superficie.cast::<IDirect3DDxgiInterfaceAccess>() else {
+                    return Ok(());
+                };
+                let Ok(textura) = (unsafe { acesso.GetInterface::<ID3D11Texture2D>() }) else {
+                    return Ok(());
+                };
+
+                if let Ok(mut c) = codificador.lock() {
+                    let _ = c.oferecer(&textura);
+                }
+                contador.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        ))?;
+    }
+
+    let sessao = pool.CreateCaptureSession(&item)?;
+    let _ = sessao.SetIsBorderRequired(false);
+    sessao.StartCapture()?;
+
+    // A bomba do codificador: roda sozinha, no ritmo dela. Dois milissegundos
+    // e bem mais rapido que qualquer taxa de quadro, entao ela nunca e o
+    // gargalo, e custa quase nada porque quase sempre nao ha o que fazer.
+    let parar = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let bomba = {
+        let codificador = codificador.clone();
+        let parar = parar.clone();
+        std::thread::spawn(move || {
+            while !parar.load(Ordering::Relaxed) {
+                if let Ok(mut c) = codificador.lock() {
+                    if let Ok(pacotes) = c.bombear() {
+                        for p in pacotes {
+                            // Pacote sem ouvinte e descartado em silencio: quem
+                            // assistia desistiu, e isso nao derruba quem transmite.
+                            let _ = envio.send(p);
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        })
+    };
+
+    std::thread::sleep(std::time::Duration::from_secs_f64(duracao_seg));
+    parar.store(true, Ordering::Relaxed);
+    let _ = bomba.join();
+    sessao.Close()?;
+    pool.Close()?;
+
+    let c = codificador.lock().unwrap();
+    if !c.ultimo_erro.is_empty() || c.entradas_erro > 0 {
+        eprintln!(
+            "codificador: {} assincrono, {} entradas aceitas, {} recusadas. {}",
+            if c.assincrono { "e" } else { "NAO e" },
+            c.entradas_ok, c.entradas_erro, c.ultimo_erro,
+        );
+    } else {
+        eprintln!(
+            "codificador: {} assincrono, {} entradas aceitas",
+            if c.assincrono { "e" } else { "NAO e" }, c.entradas_ok,
+        );
+    }
+    Ok((contador.load(Ordering::Relaxed), nome, em_hardware))
+}
+
 /// Captura uma janela por `duracao_seg` segundos e devolve o que aconteceu.
 ///
 /// Com `gravador`, cada quadro vai também para o codificador. O gravador vem

@@ -1,19 +1,20 @@
-//! Tela do Boteco: o app de transmissão.
+﻿//! Tela do Boteco: o app de transmissÃ£o.
 //!
-//! Em construção, e na ordem dos riscos: captura primeiro, codificação depois,
-//! rede por último, interface no fim. Começar pelo acabamento é o jeito de
-//! descobrir tarde que o caminho não fecha.
+//! Em construÃ§Ã£o, e na ordem dos riscos: captura primeiro, codificaÃ§Ã£o depois,
+//! rede por Ãºltimo, interface no fim. ComeÃ§ar pelo acabamento Ã© o jeito de
+//! descobrir tarde que o caminho nÃ£o fecha.
 //!
 //! Uso:
-//!   tela-boteco                  lista as janelas que dão para transmitir
-//!   tela-boteco <n> [segundos]   captura a janela de número n e mede
-//!   tela-boteco <texto> [seg]    captura a primeira janela cujo título casa
+//!   tela-boteco                  lista as janelas que dÃ£o para transmitir
+//!   tela-boteco <n> [segundos]   captura a janela de nÃºmero n e mede
+//!   tela-boteco <texto> [seg]    captura a primeira janela cujo tÃ­tulo casa
 
 mod audio;
 mod captura;
 mod codificador;
 mod janelas;
 mod transmissao;
+mod vivo;
 
 fn main() {
     // Liga com RUST_LOG=webrtc_ice=debug para ver por que uma conexao nao fecha.
@@ -22,6 +23,30 @@ fn main() {
 
     if args.is_empty() {
         listar();
+        return;
+    }
+
+    if args[0] == "--compartilhar" {
+        // O PRODUTO: a tela indo ao vivo para quem assiste. Sem arquivo.
+        let lista = janelas::listar();
+        let alvo = args[1].to_lowercase();
+        let Some(j) = lista.iter().find(|j| {
+            j.titulo.to_lowercase().contains(&alvo) || j.executavel.to_lowercase().contains(&alvo)
+        }) else {
+            eprintln!("nao achei essa janela");
+            std::process::exit(1);
+        };
+        let pasta = std::path::PathBuf::from(&args[2]);
+        let segundos: f64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20.0);
+        println!("compartilhando '{}' ao vivo...
+", j.titulo);
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        if let Err(e) = rt.block_on(transmissao::transmitir_janela(
+            j.hwnd, &pasta, segundos, 60, 8_000_000,
+        )) {
+            eprintln!("falhou: {e}");
+            std::process::exit(1);
+        }
         return;
     }
 
@@ -41,6 +66,11 @@ fn main() {
         return;
     }
 
+    if args[0] == "--vivo" {
+        ao_vivo(&args[1..]);
+        return;
+    }
+
     if args[0] == "--audio" {
         ouvir(&args[1..]);
         return;
@@ -49,16 +79,16 @@ fn main() {
     let segundos: f64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5.0);
     let lista = janelas::listar();
 
-    // Por número da lista, ou por pedaço do título. NÃO por pid: um navegador
+    // Por nÃºmero da lista, ou por pedaÃ§o do tÃ­tulo. NÃƒO por pid: um navegador
     // tem uma dezena de janelas no mesmo processo, e foi assim que a primeira
-    // versão disto escolheu a janela errada. A identidade da janela é o HWND;
-    // o pid serve para o áudio, que é outra pergunta.
+    // versÃ£o disto escolheu a janela errada. A identidade da janela Ã© o HWND;
+    // o pid serve para o Ã¡udio, que Ã© outra pergunta.
     let escolhida = match args[0].parse::<usize>() {
         Ok(n) if n >= 1 && n <= lista.len() => lista.get(n - 1),
         _ => {
-            // Casa pelo título OU pelo executável: quem procura pensa no
-            // aplicativo, e o título costuma ser outra coisa. A janela do
-            // Spotify se chama pelo nome da música tocando.
+            // Casa pelo tÃ­tulo OU pelo executÃ¡vel: quem procura pensa no
+            // aplicativo, e o tÃ­tulo costuma ser outra coisa. A janela do
+            // Spotify se chama pelo nome da mÃºsica tocando.
             let alvo = args[0].to_lowercase();
             lista.iter().find(|j| {
                 j.titulo.to_lowercase().contains(&alvo)
@@ -77,7 +107,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Terceiro argumento liga a gravação. Sem ele, só mede a captura.
+    // Terceiro argumento liga a gravaÃ§Ã£o. Sem ele, sÃ³ mede a captura.
     let arquivo = args.get(2).cloned();
     let bitrate: u32 = args
         .get(3)
@@ -105,16 +135,16 @@ fn main() {
                     j.executavel
                 );
                 println!("encoder   {}", g.codificador);
-                // Três respostas, e não duas: "não sei" é uma delas. A versão
+                // TrÃªs respostas, e nÃ£o duas: "nÃ£o sei" Ã© uma delas. A versÃ£o
                 // anterior afirmava "software" quando a pergunta falhava, e
                 // mensagem errada custa mais caro que mensagem ausente: estava
                 // acusando a CPU enquanto o chip da placa fazia o trabalho.
                 println!(
                     "onde      {}",
                     match (g.em_hardware, g.codificador.as_str()) {
-                        (true, _) => "CHIP DA PLACA (é o que se quer)",
+                        (true, _) => "CHIP DA PLACA (Ã© o que se quer)",
                         (false, "nenhum") =>
-                            "não consegui identificar (mede o tempo de CPU para saber)",
+                            "nÃ£o consegui identificar (mede o tempo de CPU para saber)",
                         _ => "CPU em software (o Windows trocou sem avisar)",
                     }
                 );
@@ -137,12 +167,12 @@ fn main() {
     }
 }
 
-/// Mede o som de um processo. Sem ouvido: o que sai é nível, e nível responde
+/// Mede o som de um processo. Sem ouvido: o que sai Ã© nÃ­vel, e nÃ­vel responde
 /// a pergunta que importa.
 ///
-/// O teste do isolamento é feito com DOIS processos: um tocando e um mudo. Se
-/// o mudo vier mudo com o outro tocando ao lado, a separação é real. Essa é a
-/// prova que não depende de alguém escutar e achar que ouviu.
+/// O teste do isolamento Ã© feito com DOIS processos: um tocando e um mudo. Se
+/// o mudo vier mudo com o outro tocando ao lado, a separaÃ§Ã£o Ã© real. Essa Ã© a
+/// prova que nÃ£o depende de alguÃ©m escutar e achar que ouviu.
 fn ouvir(args: &[String]) {
     let Ok(pid) = args.first().map(|s| s.parse::<u32>()).unwrap_or(Err("".parse::<u32>().unwrap_err())) else {
         eprintln!("uso: tela-boteco --audio <pid> [segundos] [excluir]");
@@ -157,7 +187,7 @@ fn ouvir(args: &[String]) {
 
     println!(
         "ouvindo o pid {pid} por {segundos}s ({})...\n",
-        if modo == audio::Modo::Incluir { "só ele" } else { "tudo MENOS ele" }
+        if modo == audio::Modo::Incluir { "sÃ³ ele" } else { "tudo MENOS ele" }
     );
 
     let captura = match audio::CapturaAudio::iniciar(pid, modo) {
@@ -193,27 +223,94 @@ fn ouvir(args: &[String]) {
     let rms = if amostras > 0 { (soma / amostras as f64).sqrt() } else { 0.0 };
     let db = |v: f64| if v > 0.0 { 20.0 * v.log10() } else { -120.0 };
 
-    println!("pedaços   {pedacos}");
+    println!("pedaÃ§os   {pedacos}");
     println!("amostras  {amostras}  ({:.1}s de som)", amostras as f64 / (audio::TAXA * audio::CANAIS as u32) as f64);
     println!("pico      {:.1} dB", db(pico as f64));
-    println!("média     {:.1} dB", db(rms));
+    println!("mÃ©dia     {:.1} dB", db(rms));
     println!();
 
-    // -60 dB é silêncio de verdade: ruído de fundo digital fica bem abaixo
-    // disso, e som audível fica bem acima.
+    // -60 dB Ã© silÃªncio de verdade: ruÃ­do de fundo digital fica bem abaixo
+    // disso, e som audÃ­vel fica bem acima.
     if amostras == 0 {
-        println!("NADA chegou: a captura não abriu ou o processo não existe.");
+        println!("NADA chegou: a captura nÃ£o abriu ou o processo nÃ£o existe.");
     } else if db(rms) < -60.0 {
-        println!("SILÊNCIO: este processo não estava emitindo som.");
+        println!("SILÃŠNCIO: este processo nÃ£o estava emitindo som.");
     } else {
-        println!("TEM SOM: a captura pegou o áudio deste processo.");
+        println!("TEM SOM: a captura pegou o Ã¡udio deste processo.");
+    }
+}
+
+/// Captura ao vivo e codifica em memória, sem arquivo no caminho.
+///
+/// Opcionalmente despeja os pacotes num arquivo, mas isso é conferência: serve
+/// para olhar o fluxo com outra ferramenta e confirmar que saiu H.264 de
+/// verdade. O produto é a tela indo para quem assiste.
+fn ao_vivo(args: &[String]) {
+    let lista = janelas::listar();
+    let alvo = args.first().map(|s| s.to_lowercase()).unwrap_or_default();
+    let Some(j) = lista
+        .iter()
+        .find(|j| j.titulo.to_lowercase().contains(&alvo) || j.executavel.to_lowercase().contains(&alvo))
+    else {
+        eprintln!("nao achei essa janela");
+        std::process::exit(1);
+    };
+    let segundos: f64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5.0);
+    let despejo = args.get(2).cloned();
+
+    println!("capturando '{}' ao vivo por {segundos}s...\n", j.titulo);
+
+    let (envio, recebe) = std::sync::mpsc::channel::<Vec<u8>>();
+    let coletor = std::thread::spawn(move || {
+        let mut pacotes = 0u64;
+        let mut bytes = 0u64;
+        let mut arquivo = despejo.as_ref().map(|c| std::fs::File::create(c).expect("arquivo"));
+        let mut primeiro: Vec<u8> = Vec::new();
+        while let Ok(p) = recebe.recv() {
+            if primeiro.is_empty() {
+                primeiro = p.iter().take(8).copied().collect();
+            }
+            pacotes += 1;
+            bytes += p.len() as u64;
+            if let Some(f) = arquivo.as_mut() {
+                use std::io::Write;
+                let _ = f.write_all(&p);
+            }
+        }
+        (pacotes, bytes, primeiro)
+    });
+
+    match captura::capturar_ao_vivo(j.hwnd, segundos, 60, 8_000_000, envio) {
+        Ok((quadros, nome, hardware)) => {
+            let (pacotes, bytes, primeiro) = coletor.join().unwrap_or((0, 0, Vec::new()));
+            println!("quadros capturados  {quadros}");
+            println!("pacotes de H.264    {pacotes}  ({:.2} MB)", bytes as f64 / 1_048_576.0);
+            println!("codificador         {nome}");
+            println!("onde                {}", if hardware { "CHIP DA PLACA" } else { "CPU em software" });
+            // Os quatro primeiros bytes dizem o formato: 00 00 00 01 é Annex-B,
+            // que é o que o WebRTC espera receber. Qualquer outra coisa teria de
+            // ser convertida antes de ir para a rede.
+            println!(
+                "começo do fluxo     {}",
+                primeiro.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+            );
+            if pacotes == 0 {
+                println!("\nNENHUM pacote saiu: o codificador não produziu nada.");
+            } else {
+                println!("\nCodificação ao vivo funcionando, sem arquivo no caminho.");
+            }
+        }
+        Err(e) => {
+            eprintln!("falhou: {e}");
+            std::process::exit(1);
+        }
     }
 }
 
 fn listar() {
     let lista = janelas::listar();
     println!("{} janela(s) que dariam para transmitir:\n", lista.len());
-    println!("{:>3}  {:<10} {:<22} {:>11}   {}", "n", "pid", "executável", "tamanho", "título");
+    println!("{:>3}  {:<10} {:<22} {:>11}   {}", "n", "pid", "executÃ¡vel", "tamanho", "tÃ­tulo");
     println!("{}", "-".repeat(98));
 
     for (i, j) in lista.iter().enumerate() {
@@ -227,8 +324,10 @@ fn listar() {
     }
 
     if lista.is_empty() {
-        println!("(nenhuma: isso é suspeito, e vale olhar os filtros em janelas.rs)");
+        println!("(nenhuma: isso Ã© suspeito, e vale olhar os filtros em janelas.rs)");
     } else {
         println!("\nPara capturar uma: tela-boteco <n> [segundos]");
     }
 }
+
+

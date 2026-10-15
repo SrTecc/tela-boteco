@@ -32,6 +32,147 @@ const STUN: &[&str] = &[
     "stun:stun1.l.google.com:19302",
 ];
 
+/// Transmite uma janela AO VIVO. É o produto.
+///
+/// A captura roda numa thread sua, o codificador na dele, e aqui só se empurra
+/// para a rede o que já saiu pronto. Nenhum arquivo no caminho.
+pub async fn transmitir_janela(
+    hwnd: isize,
+    pasta: &Path,
+    segundos: f64,
+    fps: u32,
+    bitrate: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (conexao, trilha) = montar_conexao().await?;
+    negociar(&conexao, pasta).await?;
+
+    // A ponte entre o mundo sem async (captura e codificador) e o com async
+    // (rede). Uma thread só, repassando: tentar fazer a captura falar async
+    // seria contaminar o caminho quente com um runtime que ele não precisa.
+    let (bruto_envio, bruto_recebe) = std::sync::mpsc::channel::<Vec<u8>>();
+    let (rede_envio, mut rede_recebe) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        while let Ok(p) = bruto_recebe.recv() {
+            if rede_envio.send(p).is_err() {
+                break;
+            }
+        }
+    });
+
+    let captura = std::thread::spawn(move || {
+        crate::captura::capturar_ao_vivo(hwnd, segundos, fps, bitrate, bruto_envio)
+    });
+
+    let intervalo = Duration::from_secs_f64(1.0 / fps as f64);
+    let mut enviados = 0u64;
+    let mut bytes = 0u64;
+    while let Some(pacote) = rede_recebe.recv().await {
+        bytes += pacote.len() as u64;
+        trilha
+            .write_sample(&Sample {
+                data: pacote.into(),
+                duration: intervalo,
+                ..Default::default()
+            })
+            .await?;
+        enviados += 1;
+    }
+
+    let (quadros, nome, hardware) = captura
+        .join()
+        .map_err(|_| "a thread da captura morreu")??;
+    println!("quadros capturados  {quadros}");
+    println!("pacotes enviados    {enviados}  ({:.2} MB)", bytes as f64 / 1_048_576.0);
+    println!("codificador         {nome} ({})", if hardware { "chip da placa" } else { "CPU" });
+
+    conexao.close().await?;
+    Ok(())
+}
+
+/// A conexão e a trilha de vídeo, que são iguais nos dois modos.
+async fn montar_conexao() -> Result<
+    (
+        Arc<webrtc::peer_connection::RTCPeerConnection>,
+        Arc<TrackLocalStaticSample>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    let mut motor = MediaEngine::default();
+    motor.register_default_codecs()?;
+    let mut registro = Registry::new();
+    registro = register_default_interceptors(registro, &mut motor)?;
+
+    let mut ajustes = webrtc::api::setting_engine::SettingEngine::default();
+    ajustes.set_ice_multicast_dns_mode(webrtc::ice::mdns::MulticastDnsMode::QueryOnly);
+
+    let api = APIBuilder::new()
+        .with_media_engine(motor)
+        .with_interceptor_registry(registro)
+        .with_setting_engine(ajustes)
+        .build();
+
+    let conexao = Arc::new(
+        api.new_peer_connection(RTCConfiguration {
+            ice_servers: vec![RTCIceServer {
+                urls: STUN.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await?,
+    );
+
+    let trilha = Arc::new(TrackLocalStaticSample::new(
+        RTCRtpCodecCapability {
+            mime_type: MIME_TYPE_H264.to_owned(),
+            ..Default::default()
+        },
+        "video".to_owned(),
+        "tela-boteco".to_owned(),
+    ));
+    conexao
+        .add_track(Arc::clone(&trilha) as Arc<dyn TrackLocal + Send + Sync>)
+        .await?;
+
+    conexao.on_peer_connection_state_change(Box::new(|estado: RTCPeerConnectionState| {
+        println!("conexão: {estado}");
+        Box::pin(async {})
+    }));
+
+    Ok((conexao, trilha))
+}
+
+/// Troca oferta e resposta pela pasta de sinalização.
+async fn negociar(
+    conexao: &Arc<webrtc::peer_connection::RTCPeerConnection>,
+    pasta: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let oferta = conexao.create_offer(None).await?;
+    let mut coleta = conexao.gathering_complete_promise().await;
+    conexao.set_local_description(oferta).await?;
+    let _ = coleta.recv().await;
+
+    let local = conexao.local_description().await.ok_or("sem descrição local")?;
+    let arquivo_resposta = pasta.join("resposta.json");
+    let _ = std::fs::remove_file(&arquivo_resposta);
+    std::fs::write(pasta.join("oferta.json"), serde_json::to_string(&local)?)?;
+    println!("oferta escrita, esperando a resposta...");
+
+    let resposta = loop {
+        if let Ok(texto) = std::fs::read_to_string(&arquivo_resposta) {
+            if !texto.trim().is_empty() {
+                break texto;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    };
+    conexao
+        .set_remote_description(serde_json::from_str(&resposta)?)
+        .await?;
+    println!("resposta recebida, negociando...");
+    Ok(())
+}
+
 pub async fn transmitir_arquivo(
     caminho: &Path,
     pasta: &Path,
