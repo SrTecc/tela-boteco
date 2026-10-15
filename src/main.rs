@@ -1,35 +1,94 @@
 //! Tela do Boteco: o app de transmissão.
 //!
-//! Primeiro marco da Fase 1: listar as janelas transmissíveis. Sem interface e
-//! sem rede ainda, de propósito. O plano é atacar o risco técnico antes do
-//! acabamento, e a ordem dos riscos é captura, codificação e só então rede.
+//! Em construção, e na ordem dos riscos: captura primeiro, codificação depois,
+//! rede por último, interface no fim. Começar pelo acabamento é o jeito de
+//! descobrir tarde que o caminho não fecha.
+//!
+//! Uso:
+//!   tela-boteco                  lista as janelas que dão para transmitir
+//!   tela-boteco <n> [segundos]   captura a janela de número n e mede
+//!   tela-boteco <texto> [seg]    captura a primeira janela cujo título casa
 
+mod captura;
 mod janelas;
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    if args.is_empty() {
+        listar();
+        return;
+    }
+
+    let segundos: f64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5.0);
     let lista = janelas::listar();
 
-    println!("{} janela(s) que dariam para transmitir:\n", lista.len());
-    println!(
-        "{:<10} {:<22} {:>11}   {}",
-        "pid", "executável", "tamanho", "título"
-    );
-    println!("{}", "-".repeat(94));
+    // Por número da lista, ou por pedaço do título. NÃO por pid: um navegador
+    // tem uma dezena de janelas no mesmo processo, e foi assim que a primeira
+    // versão disto escolheu a janela errada. A identidade da janela é o HWND;
+    // o pid serve para o áudio, que é outra pergunta.
+    let escolhida = match args[0].parse::<usize>() {
+        Ok(n) if n >= 1 && n <= lista.len() => lista.get(n - 1),
+        _ => {
+            let alvo = args[0].to_lowercase();
+            lista.iter().find(|j| j.titulo.to_lowercase().contains(&alvo))
+        }
+    };
 
-    for j in &lista {
+    let Some(j) = escolhida else {
+        eprintln!("nao achei essa janela (roda sem argumento para ver a lista)");
+        std::process::exit(1);
+    };
+
+    if j.minimizada {
+        eprintln!("a janela esta minimizada: restaura ela antes, senao nao ha o que capturar");
+        std::process::exit(1);
+    }
+
+    println!("capturando '{}' ({}) por {segundos}s...\n", j.titulo, j.executavel);
+
+    match captura::capturar_janela(j.hwnd, segundos) {
+        Ok(r) => {
+            println!("tamanho   {}x{}", r.largura, r.altura);
+            println!("quadros   {} em {:.1}s  =>  {:.1} por segundo", r.quadros, r.segundos, r.fps());
+            println!("brilho    {:.1} de 255", r.brilho);
+            println!();
+            // Captura quebrada costuma entregar quadro preto sem erro nenhum,
+            // e um contador feliz esconderia isso.
+            if r.quadros == 0 {
+                println!("NENHUM quadro chegou: a captura nao esta funcionando.");
+            } else if r.brilho < 1.0 {
+                println!("Os quadros chegaram PRETOS: a captura abriu mas nao pegou a imagem.");
+            } else {
+                println!("Captura funcionando: os quadros chegaram com imagem de verdade.");
+            }
+        }
+        Err(e) => {
+            eprintln!("falhou: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn listar() {
+    let lista = janelas::listar();
+    println!("{} janela(s) que dariam para transmitir:\n", lista.len());
+    println!("{:>3}  {:<10} {:<22} {:>11}   {}", "n", "pid", "executável", "tamanho", "título");
+    println!("{}", "-".repeat(98));
+
+    for (i, j) in lista.iter().enumerate() {
         let titulo: String = j.titulo.chars().take(44).collect();
         let tamanho = if j.minimizada {
             "minimizada".to_string()
         } else {
             format!("{}x{}", j.largura, j.altura)
         };
-        println!(
-            "{:<10} {:<22} {:>11}   {}",
-            j.pid, j.executavel, tamanho, titulo
-        );
+        println!("{:>3}  {:<10} {:<22} {:>11}   {}", i + 1, j.pid, j.executavel, tamanho, titulo);
     }
 
     if lista.is_empty() {
         println!("(nenhuma: isso é suspeito, e vale olhar os filtros em janelas.rs)");
+    } else {
+        println!("\nPara capturar uma: tela-boteco <n> [segundos]");
     }
 }

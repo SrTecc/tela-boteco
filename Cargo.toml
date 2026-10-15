@@ -19,6 +19,18 @@ windows = { version = "0.58", features = [
     # é o que separa um aplicativo de verdade do fantasma que a loja do
     # Windows deixa para trás.
     "Win32_Graphics_Dwm",
+    # Captura: o Windows Graphics Capture é WinRT, mas quem entrega o quadro é
+    # uma textura do Direct3D. Daí os dois mundos aqui, mais as duas pontes
+    # (`System_WinRT_*`) que traduzem um para o outro.
+    "Foundation",
+    "Graphics_Capture",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_System_WinRT_Direct3D11",
 ] }
 
 [profile.release]
