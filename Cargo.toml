@@ -1,0 +1,28 @@
+[package]
+name = "tela-boteco"
+version = "0.1.0"
+edition = "2021"
+description = "Transmissão de tela do Boteco Copo Sujo"
+
+[dependencies]
+# As APIs do Windows em Rust. As features são escolhidas uma a uma de
+# propósito: a crate inteira é enorme, e cada módulo ligado custa tempo de
+# compilação. Este primeiro marco só precisa enumerar janelas e descobrir o
+# processo dono de cada uma, que é o que resolve a escolha E o áudio.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_Graphics_Gdi",
+    # Para perguntar ao gerenciador de janelas se a janela está "encoberta":
+    # é o que separa um aplicativo de verdade do fantasma que a loja do
+    # Windows deixa para trás.
+    "Win32_Graphics_Dwm",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
