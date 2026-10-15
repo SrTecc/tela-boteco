@@ -16,7 +16,7 @@
 //!   pedindo quadros.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use windows::core::{Interface, Result as WinResult};
@@ -44,10 +44,23 @@ pub struct Resultado {
     pub segundos: f64,
     pub largura: i32,
     pub altura: i32,
+    /// O que o gravador apurou, quando houve gravação.
+    pub gravacao: Option<Gravacao>,
     /// Brilho médio do último quadro, de 0 a 255. Serve para uma coisa só:
     /// provar que veio imagem de verdade. Captura que falha costuma entregar
     /// quadros pretos sem dar erro nenhum, e um contador feliz esconderia isso.
     pub brilho: f64,
+}
+
+/// O que a gravação produziu. Existe separado porque a pergunta que ela
+/// responde é outra: a captura pergunta "chega imagem?", e a gravação
+/// pergunta "quem codificou, o chip ou a CPU?".
+#[derive(Debug, Clone)]
+pub struct Gravacao {
+    pub quadros: u64,
+    pub em_hardware: bool,
+    pub codificador: String,
+    pub arquivo: String,
 }
 
 impl Resultado {
@@ -61,7 +74,16 @@ impl Resultado {
 }
 
 /// Captura uma janela por `duracao_seg` segundos e devolve o que aconteceu.
-pub fn capturar_janela(hwnd: isize, duracao_seg: f64) -> WinResult<Resultado> {
+///
+/// Com `gravador`, cada quadro vai também para o codificador. O gravador vem
+/// embrulhado porque o aviso de quadro pronto chega numa thread do sistema, e
+/// não nesta: é o Windows que decide quando entregar.
+pub fn capturar_janela(
+    hwnd: isize,
+    duracao_seg: f64,
+    gravar_em: Option<&str>,
+    bitrate: u32,
+) -> WinResult<Resultado> {
     if !GraphicsCaptureSession::IsSupported()? {
         return Err(windows::core::Error::new(
             windows::Win32::Foundation::E_NOTIMPL,
@@ -92,13 +114,29 @@ pub fn capturar_janela(hwnd: isize, duracao_seg: f64) -> WinResult<Resultado> {
         tamanho,
     )?;
 
+    // O gravador nasce aqui porque precisa da MESMA placa da captura: textura
+    // de um dispositivo não atravessa para outro. O tamanho vem arredondado
+    // para baixo em número par, exigência do H.264.
+    let gravador = match gravar_em {
+        Some(caminho) => Some(Arc::new(Mutex::new(crate::codificador::Gravador::novo(
+            &d3d,
+            &contexto,
+            caminho,
+            (tamanho.Width as u32) & !1,
+            (tamanho.Height as u32) & !1,
+            60,
+            bitrate,
+        )?))),
+        None => None,
+    };
+
     let contador = Arc::new(AtomicU64::new(0));
-    let ultimo: Arc<std::sync::Mutex<Option<ID3D11Texture2D>>> =
-        Arc::new(std::sync::Mutex::new(None));
+    let ultimo: Arc<Mutex<Option<ID3D11Texture2D>>> = Arc::new(Mutex::new(None));
 
     {
         let contador = contador.clone();
         let ultimo = ultimo.clone();
+        let gravador = gravador.clone();
         pool.FrameArrived(&TypedEventHandler::<Direct3D11CaptureFramePool, _>::new(
             move |pool: &Option<Direct3D11CaptureFramePool>, _| {
                 let Some(pool) = pool.as_ref() else {
@@ -111,6 +149,24 @@ pub fn capturar_janela(hwnd: isize, duracao_seg: f64) -> WinResult<Resultado> {
                         if let Ok(acesso) = superficie.cast::<IDirect3DDxgiInterfaceAccess>() {
                             if let Ok(textura) = unsafe { acesso.GetInterface::<ID3D11Texture2D>() }
                             {
+                                // Gravar aqui, e não numa fila, de propósito:
+                                // o codificador é assíncrono por dentro, então
+                                // `escrever` devolve antes de a codificação
+                                // terminar. Uma fila só adicionaria atraso.
+                                if let Some(g) = gravador.as_ref() {
+                                    // O instante vem do próprio quadro, e não
+                                    // do relógio daqui: entre o Windows
+                                    // entregar e esta linha rodar há atraso
+                                    // variável, e é ele que faz vídeo gravado
+                                    // sair com ritmo torto.
+                                    let tempo = quadro
+                                        .SystemRelativeTime()
+                                        .map(|t| t.Duration)
+                                        .unwrap_or(0);
+                                    if let Ok(mut g) = g.lock() {
+                                        let _ = g.escrever(&textura, tempo);
+                                    }
+                                }
                                 *ultimo.lock().unwrap() = Some(textura);
                             }
                         }
@@ -136,6 +192,22 @@ pub fn capturar_janela(hwnd: isize, duracao_seg: f64) -> WinResult<Resultado> {
     sessao.Close()?;
     pool.Close()?;
 
+    // Fecha o gravador ANTES de medir brilho: o Finalize e quem escreve o
+    // indice do MP4, e arquivo sem indice nao abre em player nenhum.
+    let gravacao = match gravador {
+        Some(g) => {
+            let g = g.lock().unwrap();
+            g.fechar()?;
+            Some(Gravacao {
+                quadros: g.quadros,
+                em_hardware: g.em_hardware,
+                codificador: g.codificador.clone(),
+                arquivo: gravar_em.unwrap_or_default().to_string(),
+            })
+        }
+        None => None,
+    };
+
     let brilho = match ultimo.lock().unwrap().take() {
         Some(textura) => medir_brilho(&d3d, &contexto, &textura)?,
         None => 0.0,
@@ -146,6 +218,7 @@ pub fn capturar_janela(hwnd: isize, duracao_seg: f64) -> WinResult<Resultado> {
         segundos,
         largura: tamanho.Width,
         altura: tamanho.Height,
+        gravacao,
         brilho,
     })
 }

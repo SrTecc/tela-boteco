@@ -10,6 +10,7 @@
 //!   tela-boteco <texto> [seg]    captura a primeira janela cujo título casa
 
 mod captura;
+mod codificador;
 mod janelas;
 
 fn main() {
@@ -45,13 +46,39 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Terceiro argumento liga a gravação. Sem ele, só mede a captura.
+    let arquivo = args.get(2).cloned();
+    let bitrate: u32 = args
+        .get(3)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(12_000_000);
+
     println!("capturando '{}' ({}) por {segundos}s...\n", j.titulo, j.executavel);
 
-    match captura::capturar_janela(j.hwnd, segundos) {
+    match captura::capturar_janela(j.hwnd, segundos, arquivo.as_deref(), bitrate) {
         Ok(r) => {
             println!("tamanho   {}x{}", r.largura, r.altura);
             println!("quadros   {} em {:.1}s  =>  {:.1} por segundo", r.quadros, r.segundos, r.fps());
             println!("brilho    {:.1} de 255", r.brilho);
+
+            if let Some(g) = &r.gravacao {
+                println!();
+                println!("gravado   {} ({} quadros)", g.arquivo, g.quadros);
+                println!("encoder   {}", g.codificador);
+                // Três respostas, e não duas: "não sei" é uma delas. A versão
+                // anterior afirmava "software" quando a pergunta falhava, e
+                // mensagem errada custa mais caro que mensagem ausente: estava
+                // acusando a CPU enquanto o chip da placa fazia o trabalho.
+                println!(
+                    "onde      {}",
+                    match (g.em_hardware, g.codificador.as_str()) {
+                        (true, _) => "CHIP DA PLACA (é o que se quer)",
+                        (false, "nenhum") =>
+                            "não consegui identificar (mede o tempo de CPU para saber)",
+                        _ => "CPU em software (o Windows trocou sem avisar)",
+                    }
+                );
+            }
             println!();
             // Captura quebrada costuma entregar quadro preto sem erro nenhum,
             // e um contador feliz esconderia isso.

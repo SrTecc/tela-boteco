@@ -31,6 +31,11 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_System_WinRT_Graphics_Capture",
     "Win32_System_WinRT_Direct3D11",
+    # Codificação: o Media Foundation é a porta do Windows para o chip de
+    # codificação da placa. Cobre Intel, NVIDIA e AMD com o mesmo código, que é
+    # o que permite um binário só para o PC de jogo e para o notebook.
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
 ] }
 
 [profile.release]

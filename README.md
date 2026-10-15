@@ -34,11 +34,26 @@ do som. O app é a opção para quem quer o som certo.
 Em construção. O que já funciona:
 
 - [x] Listar as janelas transmissíveis, com o processo dono de cada uma
-- [ ] Capturar uma janela (Windows Graphics Capture)
-- [ ] Codificar em hardware
+- [x] Capturar uma janela (Windows Graphics Capture), sem passar quadro pela CPU
+- [x] Codificar em H.264 pelo chip da placa e gravar em MP4
 - [ ] Áudio do processo escolhido
 - [ ] Mandar para o site (WebRTC)
 - [ ] Interface e bandeja
+
+## O que já foi medido
+
+Num notebook com gráficos integrados Intel, capturando uma janela com
+movimento em toda a tela:
+
+| | |
+|---|---|
+| Quadros | 372 em 8 segundos |
+| Duração do arquivo | 8,000s para 8s de captura |
+| Custo da codificação | **1,09s de CPU** para 8s de vídeo |
+| Perfil | H.264 High |
+
+O custo de CPU é a prova de que quem codifica é o chip da placa: em
+software, o mesmo trabalho cobraria mais de vinte vezes isso.
 
 ## Compilar
 
