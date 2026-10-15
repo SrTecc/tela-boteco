@@ -27,6 +27,9 @@ use windows::Win32::Media::MediaFoundation::*;
 pub struct Gravador {
     escritor: IMFSinkWriter,
     fluxo: u32,
+    /// O fluxo de som, quando há som. Os dois compartilham a MESMA origem de
+    /// tempo: é isso que impede o áudio de andar na frente da imagem.
+    fluxo_audio: Option<u32>,
     /// Textura própria para onde cada quadro é copiado. A captura recicla as
     /// dela a cada rodada; sem esta cópia (de placa para placa, que é barata),
     /// o codificador leria um quadro que já foi sobrescrito.
@@ -39,6 +42,7 @@ pub struct Gravador {
     origem: Option<i64>,
     ultimo_tempo: i64,
     pub quadros: u64,
+    pub amostras_audio: u64,
     pub em_hardware: bool,
     pub codificador: String,
 }
@@ -63,6 +67,7 @@ impl Gravador {
         altura: u32,
         fps: u32,
         bitrate: u32,
+        com_audio: bool,
     ) -> WinResult<Self> {
         unsafe {
             MFStartup(MF_VERSION, MFSTARTUP_FULL)?;
@@ -116,6 +121,42 @@ impl Gravador {
             entrada.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, juntar(1, 1))?;
             escritor.SetInputMediaType(fluxo, &entrada, None)?;
 
+            // O som entra como segundo fluxo, e tem de ser declarado ANTES
+            // de começar a escrever: depois disso a estrutura do arquivo já
+            // está fechada.
+            let fluxo_audio = if com_audio {
+                let saida_a = MFCreateMediaType()?;
+                saida_a.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+                saida_a.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)?;
+                saida_a.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, crate::audio::TAXA)?;
+                saida_a.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, crate::audio::CANAIS as u32)?;
+                saida_a.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
+                saida_a.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 20_000)?;
+                let fa = escritor.AddStream(&saida_a)?;
+
+                // Entra PCM de 16 bits, e não o float que a captura produz.
+                // A conversão é feita aqui, em três linhas de Rust, em vez
+                // de depender do Windows inserir um conversor sozinho: o
+                // codificador de AAC não aceita float, e descobrir isso em
+                // tempo de execução daria arquivo mudo sem erro nenhum.
+                let entrada_a = MFCreateMediaType()?;
+                entrada_a.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+                entrada_a.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)?;
+                entrada_a.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, crate::audio::TAXA)?;
+                entrada_a.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, crate::audio::CANAIS as u32)?;
+                entrada_a.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
+                entrada_a.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, crate::audio::CANAIS as u32 * 2)?;
+                entrada_a.SetUINT32(
+                    &MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
+                    crate::audio::TAXA * crate::audio::CANAIS as u32 * 2,
+                )?;
+                entrada_a.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+                escritor.SetInputMediaType(fa, &entrada_a, None)?;
+                Some(fa)
+            } else {
+                None
+            };
+
             escritor.BeginWriting()?;
 
             let (em_hardware, codificador) = quem_entrou(&escritor, fluxo);
@@ -142,6 +183,7 @@ impl Gravador {
             Ok(Self {
                 escritor,
                 fluxo,
+                fluxo_audio,
                 destino: destino.unwrap(),
                 largura,
                 altura,
@@ -150,6 +192,7 @@ impl Gravador {
                 origem: None,
                 ultimo_tempo: 0,
                 quadros: 0,
+                amostras_audio: 0,
                 em_hardware,
                 codificador,
             })
@@ -206,6 +249,53 @@ impl Gravador {
             self.escritor.WriteSample(self.fluxo, &amostra)?;
             self.ultimo_tempo = agora;
             self.quadros += 1;
+            Ok(())
+        }
+    }
+
+    /// Manda um pedaço de som, com o instante em que foi gravado.
+    ///
+    /// O tempo vem do mesmo relógio do vídeo (QPC em 100ns), e as duas trilhas
+    /// usam a MESMA origem. Sem isso o som sai andando à frente ou atrás da
+    /// imagem, que é o defeito que ninguém perdoa numa transmissão.
+    pub fn escrever_audio(&mut self, amostras: &[f32], tempo: i64) -> WinResult<()> {
+        let Some(fluxo) = self.fluxo_audio else {
+            return Ok(());
+        };
+        if amostras.is_empty() {
+            return Ok(());
+        }
+
+        unsafe {
+            // Float para PCM de 16 bits. O `clamp` não é preciosismo: amostra
+            // acima de 1.0 existe (mixagem estoura), e sem o corte ela daria a
+            // volta no inteiro e viraria estalo.
+            let bytes: Vec<u8> = amostras
+                .iter()
+                .flat_map(|a| {
+                    let v = (a.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                    v.to_le_bytes()
+                })
+                .collect();
+
+            let buffer = MFCreateMemoryBuffer(bytes.len() as u32)?;
+            let mut destino: *mut u8 = std::ptr::null_mut();
+            buffer.Lock(&mut destino, None, None)?;
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), destino, bytes.len());
+            buffer.Unlock()?;
+            buffer.SetCurrentLength(bytes.len() as u32)?;
+
+            let quadros = amostras.len() / crate::audio::CANAIS as usize;
+            let duracao = quadros as i64 * UM_SEGUNDO / crate::audio::TAXA as i64;
+
+            let amostra = MFCreateSample()?;
+            amostra.AddBuffer(&buffer)?;
+            let origem = *self.origem.get_or_insert(tempo);
+            amostra.SetSampleTime((tempo - origem).max(0))?;
+            amostra.SetSampleDuration(duracao)?;
+
+            self.escritor.WriteSample(fluxo, &amostra)?;
+            self.amostras_audio += quadros as u64;
             Ok(())
         }
     }

@@ -37,8 +37,14 @@ fn main() {
     let escolhida = match args[0].parse::<usize>() {
         Ok(n) if n >= 1 && n <= lista.len() => lista.get(n - 1),
         _ => {
+            // Casa pelo título OU pelo executável: quem procura pensa no
+            // aplicativo, e o título costuma ser outra coisa. A janela do
+            // Spotify se chama pelo nome da música tocando.
             let alvo = args[0].to_lowercase();
-            lista.iter().find(|j| j.titulo.to_lowercase().contains(&alvo))
+            lista.iter().find(|j| {
+                j.titulo.to_lowercase().contains(&alvo)
+                    || j.executavel.to_lowercase().contains(&alvo)
+            })
         }
     };
 
@@ -61,7 +67,11 @@ fn main() {
 
     println!("capturando '{}' ({}) por {segundos}s...\n", j.titulo, j.executavel);
 
-    match captura::capturar_janela(j.hwnd, segundos, arquivo.as_deref(), bitrate) {
+    // O som vem do processo DONO DA JANELA escolhida. Escolher o que
+    // transmitir e escolher a fonte de som sao a mesma acao, como no Discord.
+    let pid_audio = if arquivo.is_some() { Some(j.pid) } else { None };
+
+    match captura::capturar_janela(j.hwnd, segundos, arquivo.as_deref(), bitrate, pid_audio) {
         Ok(r) => {
             println!("tamanho   {}x{}", r.largura, r.altura);
             println!("quadros   {} em {:.1}s  =>  {:.1} por segundo", r.quadros, r.segundos, r.fps());
@@ -70,6 +80,11 @@ fn main() {
             if let Some(g) = &r.gravacao {
                 println!();
                 println!("gravado   {} ({} quadros)", g.arquivo, g.quadros);
+                println!(
+                    "som       {:.1}s de audio do processo {}",
+                    g.amostras_audio as f64 / audio::TAXA as f64,
+                    j.executavel
+                );
                 println!("encoder   {}", g.codificador);
                 // Três respostas, e não duas: "não sei" é uma delas. A versão
                 // anterior afirmava "software" quando a pergunta falhava, e

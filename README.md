@@ -37,6 +37,7 @@ Em construção. O que já funciona:
 - [x] Capturar uma janela (Windows Graphics Capture), sem passar quadro pela CPU
 - [x] Codificar em H.264 pelo chip da placa e gravar em MP4
 - [x] Áudio do processo escolhido, sem o som dos outros
+- [x] Juntar imagem e som no mesmo arquivo, alinhados
 - [ ] Mandar para o site (WebRTC)
 - [ ] Interface e bandeja
 
@@ -61,6 +62,10 @@ E o áudio por processo, que é o motivo do app existir:
 
 -120 dB é silêncio digital: zero amostra, não "baixinho". A música do outro
 processo não vazou. É essa separação que o navegador não consegue fazer.
+
+Juntando as duas coisas num arquivo só: **H.264 High + AAC LC**, com o
+primeiro pacote de som em 0,000s e o primeiro quadro em 0,031s. Trinta e um
+milissegundos de diferença, que ninguém percebe.
 
 O custo de CPU é a prova de que quem codifica é o chip da placa: em
 software, o mesmo trabalho cobraria mais de vinte vezes isso.

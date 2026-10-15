@@ -58,6 +58,7 @@ pub struct Resultado {
 #[derive(Debug, Clone)]
 pub struct Gravacao {
     pub quadros: u64,
+    pub amostras_audio: u64,
     pub em_hardware: bool,
     pub codificador: String,
     pub arquivo: String,
@@ -83,6 +84,7 @@ pub fn capturar_janela(
     duracao_seg: f64,
     gravar_em: Option<&str>,
     bitrate: u32,
+    pid_audio: Option<u32>,
 ) -> WinResult<Resultado> {
     if !GraphicsCaptureSession::IsSupported()? {
         return Err(windows::core::Error::new(
@@ -126,8 +128,47 @@ pub fn capturar_janela(
             (tamanho.Height as u32) & !1,
             60,
             bitrate,
+            pid_audio.is_some(),
         )?))),
         None => None,
+    };
+
+    // O som vem por um canal, numa thread propria. Nao da para puxar som no
+    // mesmo lugar que recebe quadro: o video chega quando a imagem muda, e o
+    // som chega sempre, inclusive quando a tela esta parada.
+    let audio = match (pid_audio, gravador.as_ref()) {
+        (Some(pid), Some(g)) => {
+            match crate::audio::CapturaAudio::iniciar(pid, crate::audio::Modo::Incluir) {
+                Ok(captura) => {
+                    let g = g.clone();
+                    let fim = std::time::Instant::now()
+                        + std::time::Duration::from_secs_f64(duracao_seg + 0.5);
+                    Some(std::thread::spawn(move || {
+                        while std::time::Instant::now() < fim {
+                            match captura.receptor.recv_timeout(
+                                std::time::Duration::from_millis(100),
+                            ) {
+                                Ok(p) => {
+                                    if let Ok(mut g) = g.lock() {
+                                        let _ = g.escrever_audio(&p.amostras, p.tempo);
+                                    }
+                                }
+                                Err(_) => continue,
+                            }
+                        }
+                        captura.parar();
+                    }))
+                }
+                Err(e) => {
+                    // Som e o motivo do app existir, mas falhar nele nao
+                    // pode cancelar a transmissao: melhor imagem sem som
+                    // que nada.
+                    eprintln!("aviso: nao consegui abrir o audio do processo: {e}");
+                    None
+                }
+            }
+        }
+        _ => None,
     };
 
     let contador = Arc::new(AtomicU64::new(0));
@@ -192,6 +233,12 @@ pub fn capturar_janela(
     sessao.Close()?;
     pool.Close()?;
 
+    // O som precisa terminar de entrar ANTES do fechamento: o Finalize
+    // escreve o indice, e o que chegar depois dele nao entra no arquivo.
+    if let Some(t) = audio {
+        let _ = t.join();
+    }
+
     // Fecha o gravador ANTES de medir brilho: o Finalize e quem escreve o
     // indice do MP4, e arquivo sem indice nao abre em player nenhum.
     let gravacao = match gravador {
@@ -200,6 +247,7 @@ pub fn capturar_janela(
             g.fechar()?;
             Some(Gravacao {
                 quadros: g.quadros,
+                amostras_audio: g.amostras_audio,
                 em_hardware: g.em_hardware,
                 codificador: g.codificador.clone(),
                 arquivo: gravar_em.unwrap_or_default().to_string(),
