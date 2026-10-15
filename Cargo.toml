@@ -9,7 +9,15 @@ description = "Transmissão de tela do Boteco Copo Sujo"
 # propósito: a crate inteira é enorme, e cada módulo ligado custa tempo de
 # compilação. Este primeiro marco só precisa enumerar janelas e descobrir o
 # processo dono de cada uma, que é o que resolve a escolha E o áudio.
+# O macro que implementa interface COM em Rust expande para caminhos desta
+# crate, entao ela precisa estar nomeada aqui.
+windows-core = "0.58"
 windows = { version = "0.58", features = [
+    # Permite IMPLEMENTAR interface COM, e nao so chamar: o aviso de que a
+    # ativacao do audio terminou chega por um callback que e nosso.
+    "implement",
+    "Win32_Security",
+    "Win32_Media_Multimedia",
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Threading",
@@ -36,6 +44,11 @@ windows = { version = "0.58", features = [
     # o que permite um binário só para o PC de jogo e para o notebook.
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
+    # Áudio por processo: é a razão de o app existir. O navegador não consegue
+    # separar o som de um aplicativo do som do sistema; estas APIs conseguem.
+    "Win32_Media_Audio",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
 ] }
 
 [profile.release]

@@ -9,6 +9,7 @@
 //!   tela-boteco <n> [segundos]   captura a janela de número n e mede
 //!   tela-boteco <texto> [seg]    captura a primeira janela cujo título casa
 
+mod audio;
 mod captura;
 mod codificador;
 mod janelas;
@@ -18,6 +19,11 @@ fn main() {
 
     if args.is_empty() {
         listar();
+        return;
+    }
+
+    if args[0] == "--audio" {
+        ouvir(&args[1..]);
         return;
     }
 
@@ -94,6 +100,79 @@ fn main() {
             eprintln!("falhou: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+/// Mede o som de um processo. Sem ouvido: o que sai é nível, e nível responde
+/// a pergunta que importa.
+///
+/// O teste do isolamento é feito com DOIS processos: um tocando e um mudo. Se
+/// o mudo vier mudo com o outro tocando ao lado, a separação é real. Essa é a
+/// prova que não depende de alguém escutar e achar que ouviu.
+fn ouvir(args: &[String]) {
+    let Ok(pid) = args.first().map(|s| s.parse::<u32>()).unwrap_or(Err("".parse::<u32>().unwrap_err())) else {
+        eprintln!("uso: tela-boteco --audio <pid> [segundos] [excluir]");
+        std::process::exit(2);
+    };
+    let segundos: f64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5.0);
+    let modo = if args.get(2).map(|s| s == "excluir").unwrap_or(false) {
+        audio::Modo::Excluir
+    } else {
+        audio::Modo::Incluir
+    };
+
+    println!(
+        "ouvindo o pid {pid} por {segundos}s ({})...\n",
+        if modo == audio::Modo::Incluir { "só ele" } else { "tudo MENOS ele" }
+    );
+
+    let captura = match audio::CapturaAudio::iniciar(pid, modo) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("falhou: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let fim = std::time::Instant::now() + std::time::Duration::from_secs_f64(segundos);
+    let (mut pedacos, mut amostras, mut pico, mut soma) = (0u64, 0u64, 0f32, 0f64);
+
+    while std::time::Instant::now() < fim {
+        let resta = fim - std::time::Instant::now();
+        match captura.receptor.recv_timeout(resta.min(std::time::Duration::from_millis(200))) {
+            Ok(p) => {
+                pedacos += 1;
+                amostras += p.amostras.len() as u64;
+                for a in &p.amostras {
+                    let v = a.abs();
+                    if v > pico {
+                        pico = v;
+                    }
+                    soma += (*a as f64) * (*a as f64);
+                }
+            }
+            Err(_) => continue,
+        }
+    }
+    captura.parar();
+
+    let rms = if amostras > 0 { (soma / amostras as f64).sqrt() } else { 0.0 };
+    let db = |v: f64| if v > 0.0 { 20.0 * v.log10() } else { -120.0 };
+
+    println!("pedaços   {pedacos}");
+    println!("amostras  {amostras}  ({:.1}s de som)", amostras as f64 / (audio::TAXA * audio::CANAIS as u32) as f64);
+    println!("pico      {:.1} dB", db(pico as f64));
+    println!("média     {:.1} dB", db(rms));
+    println!();
+
+    // -60 dB é silêncio de verdade: ruído de fundo digital fica bem abaixo
+    // disso, e som audível fica bem acima.
+    if amostras == 0 {
+        println!("NADA chegou: a captura não abriu ou o processo não existe.");
+    } else if db(rms) < -60.0 {
+        println!("SILÊNCIO: este processo não estava emitindo som.");
+    } else {
+        println!("TEM SOM: a captura pegou o áudio deste processo.");
     }
 }
 

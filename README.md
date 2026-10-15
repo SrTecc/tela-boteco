@@ -36,7 +36,7 @@ Em construção. O que já funciona:
 - [x] Listar as janelas transmissíveis, com o processo dono de cada uma
 - [x] Capturar uma janela (Windows Graphics Capture), sem passar quadro pela CPU
 - [x] Codificar em H.264 pelo chip da placa e gravar em MP4
-- [ ] Áudio do processo escolhido
+- [x] Áudio do processo escolhido, sem o som dos outros
 - [ ] Mandar para o site (WebRTC)
 - [ ] Interface e bandeja
 
@@ -51,6 +51,16 @@ movimento em toda a tela:
 | Duração do arquivo | 8,000s para 8s de captura |
 | Custo da codificação | **1,09s de CPU** para 8s de vídeo |
 | Perfil | H.264 High |
+
+E o áudio por processo, que é o motivo do app existir:
+
+| Teste | Pico | Veredito |
+|---|---|---|
+| Spotify tocando | -37,7 dB | tem som |
+| VSCode, **com o Spotify tocando ao lado** | **-120 dB** | silêncio absoluto |
+
+-120 dB é silêncio digital: zero amostra, não "baixinho". A música do outro
+processo não vazou. É essa separação que o navegador não consegue fazer.
 
 O custo de CPU é a prova de que quem codifica é o chip da placa: em
 software, o mesmo trabalho cobraria mais de vinte vezes isso.
