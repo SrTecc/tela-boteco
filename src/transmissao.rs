@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
 use webrtc::api::APIBuilder;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
@@ -38,12 +38,19 @@ const STUN: &[&str] = &[
 /// para a rede o que já saiu pronto. Nenhum arquivo no caminho.
 pub async fn transmitir_janela(
     hwnd: isize,
+    pid: u32,
     pasta: &Path,
     segundos: f64,
     fps: u32,
     bitrate: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (conexao, trilha) = montar_conexao().await?;
+    let (conexao, trilha, trilha_som) = montar_conexao().await?;
+
+    // O som do processo dono da janela, codificado em Opus. Começa ANTES da
+    // negociação porque a captura leva um instante para abrir, e silêncio no
+    // começo da transmissão é o tipo de coisa que ninguém entende.
+    let som = somente_som(pid, trilha_som, segundos);
+
     negociar(&conexao, pasta).await?;
 
     // A ponte entre o mundo sem async (captura e codificador) e o com async
@@ -78,9 +85,11 @@ pub async fn transmitir_janela(
         enviados += 1;
     }
 
+    let pacotes_som = som.await.unwrap_or(0);
     let (quadros, nome, hardware) = captura
         .join()
         .map_err(|_| "a thread da captura morreu")??;
+    println!("pacotes de som      {pacotes_som}");
     println!("quadros capturados  {quadros}");
     println!("pacotes enviados    {enviados}  ({:.2} MB)", bytes as f64 / 1_048_576.0);
     println!("codificador         {nome} ({})", if hardware { "chip da placa" } else { "CPU" });
@@ -89,10 +98,100 @@ pub async fn transmitir_janela(
     Ok(())
 }
 
-/// A conexão e a trilha de vídeo, que são iguais nos dois modos.
+/// Captura o som de um processo, codifica em Opus e manda pela trilha.
+///
+/// O Opus trabalha em blocos de tamanho fixo (20 ms), e a captura entrega
+/// pedaços de tamanho qualquer. Por isso existe o acumulador: juntar até fechar
+/// um bloco e só então codificar. Mandar pedaço solto produz estalo.
+fn somente_som(
+    pid: u32,
+    trilha: Arc<TrackLocalStaticSample>,
+    segundos: f64,
+) -> tokio::task::JoinHandle<u64> {
+    tokio::spawn(async move {
+        let taxa = crate::audio::TAXA;
+        let canais = crate::audio::CANAIS as usize;
+        // 20 ms é o bloco padrão do WebRTC: menor aumenta o custo por pacote,
+        // maior aumenta o atraso.
+        let por_bloco = (taxa as usize / 50) * canais;
+
+        // Codec em Rust puro. A alternativa era a biblioteca C de referencia,
+        // que nao compila aqui sem dependencia externa: para um app que as
+        // pessoas vao baixar, depender de biblioteca de sistema e pedir que
+        // ele falhe na maquina de alguem.
+        let Ok(mut opus) = rusty_opus::OpusEncoder::new(
+            taxa as i32,
+            canais,
+            rusty_opus::Application::Audio,
+        ) else {
+            eprintln!("aviso: nao consegui abrir o codificador de som");
+            return 0;
+        };
+
+        let Ok(captura) = crate::audio::CapturaAudio::iniciar(pid, crate::audio::Modo::Incluir)
+        else {
+            // Som é o motivo do app existir, mas falhar nele não derruba a
+            // transmissão: imagem sem som é melhor que nada.
+            eprintln!("aviso: não consegui abrir o som do processo");
+            return 0;
+        };
+
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs_f64(segundos);
+        let mut acumulado: Vec<f32> = Vec::with_capacity(por_bloco * 2);
+        let mut enviados = 0u64;
+        let duracao = Duration::from_millis(20);
+        // Mede o que ENTRA no codificador. Sem isso, pacote de 5 bytes
+        // (silencio em Opus) nao diz se a captura veio muda ou se o
+        // codificador e que nao esta codificando.
+        let mut pico_entrada = 0f32;
+        let mut bytes_saida = 0u64;
+
+        while std::time::Instant::now() < fim {
+            match captura.receptor.recv_timeout(Duration::from_millis(100)) {
+                Ok(p) => acumulado.extend_from_slice(&p.amostras),
+                Err(_) => continue,
+            }
+            while acumulado.len() >= por_bloco {
+                let bloco: Vec<f32> = acumulado.drain(..por_bloco).collect();
+                for a in &bloco {
+                    if a.abs() > pico_entrada { pico_entrada = a.abs(); }
+                }
+                let mut saida = vec![0u8; 4000];
+                // O tamanho do bloco e por CANAL: 960 amostras sao 20 ms a
+                // 48 kHz, independentemente de ser mono ou estereo.
+                let por_canal = bloco.len() / canais;
+                if let Ok(n) = opus.encode(&bloco, por_canal, &mut saida) {
+                    bytes_saida += n as u64;
+                    saida.truncate(n);
+                    if trilha
+                        .write_sample(&Sample {
+                            data: saida.into(),
+                            duration: duracao,
+                            ..Default::default()
+                        })
+                        .await
+                        .is_ok()
+                    {
+                        enviados += 1;
+                    }
+                }
+            }
+        }
+        captura.parar();
+        let db = if pico_entrada > 0.0 { 20.0 * pico_entrada.log10() } else { -120.0 };
+        println!(
+            "som: entrou com pico de {db:.1} dB, saiu com {} bytes em {enviados} pacotes",
+            bytes_saida,
+        );
+        enviados
+    })
+}
+
+/// A conexão e as trilhas, que são iguais nos dois modos.
 async fn montar_conexao() -> Result<
     (
         Arc<webrtc::peer_connection::RTCPeerConnection>,
+        Arc<TrackLocalStaticSample>,
         Arc<TrackLocalStaticSample>,
     ),
     Box<dyn std::error::Error>,
@@ -134,12 +233,28 @@ async fn montar_conexao() -> Result<
         .add_track(Arc::clone(&trilha) as Arc<dyn TrackLocal + Send + Sync>)
         .await?;
 
+    // A trilha de som. Opus porque e o codec do WebRTC: o AAC do gravador
+    // nao serve aqui, navegador nenhum aceita AAC nesse caminho.
+    let trilha_som = Arc::new(TrackLocalStaticSample::new(
+        RTCRtpCodecCapability {
+            mime_type: MIME_TYPE_OPUS.to_owned(),
+            clock_rate: 48_000,
+            channels: 2,
+            ..Default::default()
+        },
+        "som".to_owned(),
+        "tela-boteco".to_owned(),
+    ));
+    conexao
+        .add_track(Arc::clone(&trilha_som) as Arc<dyn TrackLocal + Send + Sync>)
+        .await?;
+
     conexao.on_peer_connection_state_change(Box::new(|estado: RTCPeerConnectionState| {
         println!("conexão: {estado}");
         Box::pin(async {})
     }));
 
-    Ok((conexao, trilha))
+    Ok((conexao, trilha, trilha_som))
 }
 
 /// Troca oferta e resposta pela pasta de sinalização.

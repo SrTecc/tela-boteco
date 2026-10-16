@@ -1,11 +1,11 @@
-[package]
+﻿[package]
 name = "tela-boteco"
 version = "0.1.0"
 edition = "2021"
-description = "Transmissão de tela do Boteco Copo Sujo"
+description = "TransmissÃ£o de tela do Boteco Copo Sujo"
 
 [dependencies]
-# WebRTC em Rust. É a peça que leva o vídeo até o navegador de quem assiste,
+# WebRTC em Rust. Ã‰ a peÃ§a que leva o vÃ­deo atÃ© o navegador de quem assiste,
 # sem servidor no meio e sem recodificar: o H.264 que o chip produziu vai
 # direto para a rede.
 # 0.17 e nao 0.11: a de 2024 falha o aperto de mao criptografico com Chrome
@@ -21,11 +21,14 @@ serde_json = "1"
 # Log do WebRTC: sem ele, falha de rede aparece como a palavra "failed" e mais
 # nada, e adivinhar motivo de ICE custa horas.
 env_logger = "0.11"
+# Opus: e o codec de som do WebRTC. O AAC que o gravador usa nao serve aqui,
+# porque navegador nenhum aceita AAC em WebRTC.
+rusty-opus = "1.0"
 
-# As APIs do Windows em Rust. As features são escolhidas uma a uma de
-# propósito: a crate inteira é enorme, e cada módulo ligado custa tempo de
-# compilação. Este primeiro marco só precisa enumerar janelas e descobrir o
-# processo dono de cada uma, que é o que resolve a escolha E o áudio.
+# As APIs do Windows em Rust. As features sÃ£o escolhidas uma a uma de
+# propÃ³sito: a crate inteira Ã© enorme, e cada mÃ³dulo ligado custa tempo de
+# compilaÃ§Ã£o. Este primeiro marco sÃ³ precisa enumerar janelas e descobrir o
+# processo dono de cada uma, que Ã© o que resolve a escolha E o Ã¡udio.
 # O macro que implementa interface COM em Rust expande para caminhos desta
 # crate, entao ela precisa estar nomeada aqui.
 windows-core = "0.58"
@@ -40,12 +43,12 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
     "Win32_System_ProcessStatus",
     "Win32_Graphics_Gdi",
-    # Para perguntar ao gerenciador de janelas se a janela está "encoberta":
-    # é o que separa um aplicativo de verdade do fantasma que a loja do
-    # Windows deixa para trás.
+    # Para perguntar ao gerenciador de janelas se a janela estÃ¡ "encoberta":
+    # Ã© o que separa um aplicativo de verdade do fantasma que a loja do
+    # Windows deixa para trÃ¡s.
     "Win32_Graphics_Dwm",
-    # Captura: o Windows Graphics Capture é WinRT, mas quem entrega o quadro é
-    # uma textura do Direct3D. Daí os dois mundos aqui, mais as duas pontes
+    # Captura: o Windows Graphics Capture Ã© WinRT, mas quem entrega o quadro Ã©
+    # uma textura do Direct3D. DaÃ­ os dois mundos aqui, mais as duas pontes
     # (`System_WinRT_*`) que traduzem um para o outro.
     "Foundation",
     "Graphics_Capture",
@@ -56,12 +59,12 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_System_WinRT_Graphics_Capture",
     "Win32_System_WinRT_Direct3D11",
-    # Codificação: o Media Foundation é a porta do Windows para o chip de
-    # codificação da placa. Cobre Intel, NVIDIA e AMD com o mesmo código, que é
-    # o que permite um binário só para o PC de jogo e para o notebook.
+    # CodificaÃ§Ã£o: o Media Foundation Ã© a porta do Windows para o chip de
+    # codificaÃ§Ã£o da placa. Cobre Intel, NVIDIA e AMD com o mesmo cÃ³digo, que Ã©
+    # o que permite um binÃ¡rio sÃ³ para o PC de jogo e para o notebook.
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
-    # Áudio por processo: é a razão de o app existir. O navegador não consegue
+    # Ãudio por processo: Ã© a razÃ£o de o app existir. O navegador nÃ£o consegue
     # separar o som de um aplicativo do som do sistema; estas APIs conseguem.
     "Win32_Media_Audio",
     "Win32_System_Com_StructuredStorage",

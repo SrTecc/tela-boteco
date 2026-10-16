@@ -42,7 +42,7 @@ fn main() {
 ", j.titulo);
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         if let Err(e) = rt.block_on(transmissao::transmitir_janela(
-            j.hwnd, &pasta, segundos, 60, 8_000_000,
+            j.hwnd, j.pid, &pasta, segundos, 60, 8_000_000,
         )) {
             eprintln!("falhou: {e}");
             std::process::exit(1);

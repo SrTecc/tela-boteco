@@ -94,6 +94,16 @@ E a cadeia inteira ao vivo, de uma janela até o navegador, sem arquivo:
 | Resolução | 1584x892 |
 | Codificador | Intel Quick Sync, no chip da placa |
 
+Com som, de ponta a ponta, compartilhando uma janela que toca um tom:
+
+| | Quem transmite | Quem assiste |
+|---|---|---|
+| Vídeo | 475 quadros, 7,95 MB | **406 decodificados**, 962x578 |
+| Som | entrou a -21,1 dB, 799 pacotes | 313 pacotes, 51 KB de Opus |
+
+O som vai em **Opus**, e não no AAC do modo de medição: é o codec que o
+WebRTC usa, e navegador nenhum aceita AAC nesse caminho.
+
 ## Compilar
 
 Precisa de Rust. No Windows, qualquer um dos dois toolchains serve:
