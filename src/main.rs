@@ -13,6 +13,7 @@ mod audio;
 mod captura;
 mod codificador;
 mod janelas;
+mod sala;
 mod sessao;
 mod transmissao;
 mod vivo;
@@ -64,6 +65,68 @@ fn main() {
             eprintln!("falhou: {e}");
             std::process::exit(1);
         }
+        return;
+    }
+
+    if args[0] == "--transmitir-sala" {
+        // O caminho de verdade: a tela indo para a sala do site.
+        let site = "https://share-portomaldito.vercel.app";
+        let Some(s) = sessao::guardada() else {
+            eprintln!("sem sessao: roda --entrar primeiro");
+            std::process::exit(1);
+        };
+        let lista = janelas::listar();
+        let alvo = args.get(1).map(|a| a.to_lowercase()).unwrap_or_default();
+        let Some(j) = lista.iter().find(|j| {
+            j.titulo.to_lowercase().contains(&alvo) || j.executavel.to_lowercase().contains(&alvo)
+        }) else {
+            eprintln!("nao achei essa janela");
+            std::process::exit(1);
+        };
+        let segundos: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(60.0);
+        println!("transmitindo '{}' para a sala...
+", j.titulo);
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        if let Err(e) = rt.block_on(transmissao::transmitir_na_sala(
+            j.hwnd, j.pid, site, &s, segundos, 60, 8_000_000,
+        )) {
+            eprintln!("falhou: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if args[0] == "--sala" {
+        // Conferencia da conversa com o site, antes de ligar a transmissao
+        // nela: bate o ponto e le a caixa postal uma vez.
+        let site = "https://share-portomaldito.vercel.app";
+        let Some(s) = sessao::guardada() else {
+            eprintln!("sem sessao: roda --entrar primeiro");
+            std::process::exit(1);
+        };
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        rt.block_on(async {
+            let sala = match sala::Sala::nova(site, &s) {
+                Ok(x) => x,
+                Err(e) => { eprintln!("falhou: {e}"); std::process::exit(1); }
+            };
+            match sala.bater_ponto(false).await {
+                Ok(p) => {
+                    println!("sala      {} ({})", p.nome.unwrap_or_default(), p.sala);
+                    println!("eu        {}", p.eu);
+                    println!("na sala   {} pessoa(s)", p.pessoas.len());
+                    for pe in &p.pessoas {
+                        println!("  - {} {}", pe.nome.clone().unwrap_or_else(|| pe.user_id.clone()),
+                            if pe.esta_transmitindo() { "(transmitindo)" } else { "" });
+                    }
+                    match sala.ler_sinais().await {
+                        Ok(v) => println!("caixa postal: {} recado(s)", v.len()),
+                        Err(e) => println!("caixa postal: {e}"),
+                    }
+                }
+                Err(e) => println!("nao deu: {e}"),
+            }
+        });
         return;
     }
 

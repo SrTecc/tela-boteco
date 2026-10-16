@@ -40,7 +40,7 @@ Em construção. O que já funciona:
 - [x] Juntar imagem e som (hoje no modo de medição, que grava arquivo)
 - [x] **Compartilhar a tela ao vivo**: captura, codifica e manda, sem arquivo no caminho
 - [x] Login do Discord, com a sessão voltando para uma porta local
-- [ ] Falar a caixa postal do site (sinalização pela Vercel)
+- [x] Falar o protocolo do site: presença, caixa postal e candidatos em fluxo
 - [ ] Interface e bandeja
 
 ## O que ele é, e o que ele não é
@@ -94,6 +94,15 @@ E a cadeia inteira ao vivo, de uma janela até o navegador, sem arquivo:
 | Quadros decodificados | 51 |
 | Resolução | 1584x892 |
 | Codificador | Intel Quick Sync, no chip da placa |
+
+E contra o site de verdade, numa call do servidor:
+
+| | |
+|---|---|
+| Sala | reivindicada, com batida de presença a cada 5s |
+| Captura em 45s | 1356 quadros, 2249 pacotes de som (45s ÷ 20ms, exato) |
+| Pedido de quem assiste | respondido com oferta em **1,5s** |
+| A oferta | vídeo H.264, som Opus e impressão digital |
 
 Com som, de ponta a ponta, compartilhando uma janela que toca um tom:
 

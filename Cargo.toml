@@ -18,6 +18,11 @@ webrtc = "0.17"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs"] }
 # A oferta e a resposta viajam como JSON, que e o formato que o site ja usa.
 serde_json = "1"
+# Cliente HTTP para falar com o site. rustls em vez do TLS do sistema: o app
+# vai ser baixado por gente qualquer, e depender da loja de certificados da
+# maquina e mais uma coisa que pode faltar na hora errada.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
 # Log do WebRTC: sem ele, falha de rede aparece como a palavra "failed" e mais
 # nada, e adivinhar motivo de ICE custa horas.
 env_logger = "0.11"
