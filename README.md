@@ -39,7 +39,8 @@ Em construção. O que já funciona:
 - [x] Áudio do processo escolhido, sem o som dos outros
 - [x] Juntar imagem e som (hoje no modo de medição, que grava arquivo)
 - [x] **Compartilhar a tela ao vivo**: captura, codifica e manda, sem arquivo no caminho
-- [ ] Falar o protocolo do site (sessao do Discord e caixa postal)
+- [x] Login do Discord, com a sessão voltando para uma porta local
+- [ ] Falar a caixa postal do site (sinalização pela Vercel)
 - [ ] Interface e bandeja
 
 ## O que ele é, e o que ele não é

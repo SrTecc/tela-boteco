@@ -13,6 +13,7 @@ mod audio;
 mod captura;
 mod codificador;
 mod janelas;
+mod sessao;
 mod transmissao;
 mod vivo;
 
@@ -62,6 +63,20 @@ fn main() {
         if let Err(e) = rt.block_on(transmissao::transmitir_arquivo(&arquivo, &pasta, fps)) {
             eprintln!("falhou: {e}");
             std::process::exit(1);
+        }
+        return;
+    }
+
+    if args[0] == "--entrar" {
+        // Login: abre o navegador e espera a sessao voltar numa porta local.
+        let site = args.get(1).cloned().unwrap_or_else(
+            || "https://share-portomaldito.vercel.app".to_string());
+        match sessao::guardada() {
+            Some(_) => println!("ja ha uma sessao valida guardada."),
+            None => match sessao::entrar(&site) {
+                Ok(_) => println!("entrou, e a sessao ficou guardada para a proxima."),
+                Err(e) => { eprintln!("falhou: {e}"); std::process::exit(1); }
+            },
         }
         return;
     }
