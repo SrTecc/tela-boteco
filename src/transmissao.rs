@@ -43,8 +43,7 @@ pub async fn transmitir_janela(
     pid: u32,
     pasta: &Path,
     segundos: f64,
-    fps: u32,
-    bitrate: u32,
+    qualidade: crate::qualidade::Qualidade,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (conexao, trilha, trilha_som) = montar_conexao().await?;
 
@@ -69,10 +68,10 @@ pub async fn transmitir_janela(
     });
 
     let captura = std::thread::spawn(move || {
-        crate::captura::capturar_ao_vivo(hwnd, segundos, fps, bitrate, bruto_envio)
+        crate::captura::capturar_ao_vivo(hwnd, segundos, qualidade, bruto_envio)
     });
 
-    let intervalo = Duration::from_secs_f64(1.0 / fps as f64);
+    let intervalo = Duration::from_secs_f64(1.0 / qualidade.fps as f64);
     let mut enviados = 0u64;
     let mut bytes = 0u64;
     while let Some(pacote) = rede_recebe.recv().await {
@@ -488,8 +487,7 @@ pub async fn transmitir_na_sala(
     site: &str,
     sessao: &str,
     segundos: f64,
-    fps: u32,
-    bitrate: u32,
+    qualidade: crate::qualidade::Qualidade,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let sala = Arc::new(crate::sala::Sala::nova(site, sessao)?);
 
@@ -521,7 +519,7 @@ pub async fn transmitir_na_sala(
         }
     });
     let captura = std::thread::spawn(move || {
-        crate::captura::capturar_ao_vivo(hwnd, segundos, fps, bitrate, bruto_envio)
+        crate::captura::capturar_ao_vivo(hwnd, segundos, qualidade, bruto_envio)
     });
 
     // A batida de presenÃƒÂ§a continua durante toda a transmissÃƒÂ£o: ÃƒÂ© ela que
@@ -571,7 +569,7 @@ pub async fn transmitir_na_sala(
     };
 
     // Empurra o vÃƒÂ­deo para as trilhas. Uma trilha sÃƒÂ³, vÃƒÂ¡rios destinos.
-    let intervalo = Duration::from_secs_f64(1.0 / fps as f64);
+    let intervalo = Duration::from_secs_f64(1.0 / qualidade.fps as f64);
     let mut enviados = 0u64;
     while let Some(pacote) = rede_recebe.recv().await {
         trilha
@@ -621,8 +619,21 @@ async fn tratar_recado(
         // teria motivo para oferecer.
         "quero" => {
             let mut mapa = conexoes.lock().await;
-            if mapa.contains_key(&recado.de) {
-                return Ok(());
+            if let Some(pc) = mapa.get(&recado.de) {
+                // Ligação viva não se renegocia: oferecer de novo faz a
+                // resposta chegar quando este lado já saiu de
+                // `have-local-offer`, e o vídeo fica carregando para sempre.
+                if pc.connection_state() == RTCPeerConnectionState::Connected {
+                    return Ok(());
+                }
+                // Ligação que NUNCA fechou é outra história: a resposta pode
+                // ter se perdido no caminho, e foi o que aconteceu quando a aba
+                // do site comia a caixa postal do aplicativo, porque as duas
+                // são a mesma pessoa. Quem pede de novo está dizendo que não
+                // recebeu; insistir em esperar deixa a pessoa na tela preta.
+                println!("{} pediu de novo e a ligação não fechou: ofereço outra", recado.de);
+                let _ = pc.close().await;
+                mapa.remove(&recado.de);
             }
             let pc = criar_conexao(api, trilha, trilha_som, sala, &recado.de).await?;
             let oferta = pc.create_offer(None).await?;

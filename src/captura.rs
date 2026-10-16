@@ -84,8 +84,7 @@ impl Resultado {
 pub fn capturar_ao_vivo(
     hwnd: isize,
     duracao_seg: f64,
-    fps: u32,
-    bitrate: u32,
+    qualidade: crate::qualidade::Qualidade,
     envio: std::sync::mpsc::Sender<Vec<u8>>,
 ) -> WinResult<(u64, String, bool)> {
     if !GraphicsCaptureSession::IsSupported()? {
@@ -107,11 +106,19 @@ pub fn capturar_ao_vivo(
     let tamanho = item.Size()?;
 
     // Dimensão par: o H.264 amostra a cor de dois em dois pixels.
-    let largura = (tamanho.Width as u32) & !1;
-    let altura = (tamanho.Height as u32) & !1;
+    let larg_entra = (tamanho.Width as u32) & !1;
+    let alt_entra = (tamanho.Height as u32) & !1;
+    // O preset manda aqui. Diminuir é de graça: o VideoProcessor já roda no
+    // chip da placa para trocar BGRA por NV12, e escala no mesmo passo.
+    let (largura, altura) =
+        crate::qualidade::dimensoes(larg_entra, alt_entra, qualidade.altura_max);
+    if (largura, altura) != (larg_entra, alt_entra) {
+        println!("qualidade {}: {larg_entra}x{alt_entra} vai como {largura}x{altura}", qualidade.id);
+    }
 
     let codificador = Arc::new(Mutex::new(crate::vivo::Vivo::novo(
-        &d3d, &contexto, largura, altura, fps, bitrate,
+        &d3d, &contexto, larg_entra, alt_entra, largura, altura,
+        qualidade.fps, qualidade.bitrate,
     )?));
     let nome = codificador.lock().unwrap().nome.clone();
     let em_hardware = codificador.lock().unwrap().em_hardware;
@@ -174,6 +181,28 @@ pub fn capturar_ao_vivo(
             }
         })
     };
+
+    // Vigia de janela parada. A captura do Windows só entrega quadro quando a
+    // imagem MUDA, e algumas janelas simplesmente param de desenhar quando
+    // ficam atrás das outras (o Chrome faz isso de propósito, para economizar).
+    // Minimizada, então, não desenha nunca. O resultado é transmissão que sai
+    // sem erro nenhum, com zero quadro, e do outro lado só tela preta.
+    //
+    // Isto já me custou um teste inteiro com gente esperando: o relatório do
+    // fim dizia "quadros capturados 0" e ninguém tinha visto isso acontecendo.
+    // Aviso que chega depois do estrago não é aviso.
+    {
+        let contador = contador.clone();
+        let parar = parar.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(6));
+            if !parar.load(Ordering::Relaxed) && contador.load(Ordering::Relaxed) == 0 {
+                eprintln!(
+                    "AVISO: 6 segundos e nenhum quadro. A janela escolhida nao esta desenhando (minimizada, ou parada por estar atras das outras). Quem assiste ve tela preta. Traga a janela para a frente."
+                );
+            }
+        });
+    }
 
     std::thread::sleep(std::time::Duration::from_secs_f64(duracao_seg));
     parar.store(true, Ordering::Relaxed);

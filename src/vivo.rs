@@ -59,6 +59,8 @@ impl Vivo {
     pub fn novo(
         d3d: &ID3D11Device,
         contexto: &ID3D11DeviceContext,
+        larg_entra: u32,
+        alt_entra: u32,
         largura: u32,
         altura: u32,
         fps: u32,
@@ -67,7 +69,11 @@ impl Vivo {
         unsafe {
             MFStartup(MF_VERSION, MFSTARTUP_FULL)?;
 
-            let conversor = Conversor::novo(d3d, contexto, largura, altura)?;
+            // O conversor entrega JÁ no tamanho de saída: o VideoProcessor
+            // escala no mesmo passo em que troca BGRA por NV12, no chip da
+            // placa. Escalar é de graça aqui, e é o que mais alivia a conta.
+            let conversor =
+                Conversor::novo(d3d, contexto, larg_entra, alt_entra, largura, altura)?;
             let (mft, nome, em_hardware) = achar_codificador(largura, altura)?;
 
             // Diz em qual placa trabalhar. Sem isto o codificador exige o
@@ -338,6 +344,8 @@ impl Conversor {
     fn novo(
         d3d: &ID3D11Device,
         contexto: &ID3D11DeviceContext,
+        larg_entra: u32,
+        alt_entra: u32,
         largura: u32,
         altura: u32,
     ) -> WinResult<Self> {
@@ -347,8 +355,8 @@ impl Conversor {
 
             let desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
                 InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
-                InputWidth: largura,
-                InputHeight: altura,
+                InputWidth: larg_entra,
+                InputHeight: alt_entra,
                 OutputWidth: largura,
                 OutputHeight: altura,
                 Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,

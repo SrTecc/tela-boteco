@@ -13,6 +13,7 @@ mod audio;
 mod captura;
 mod codificador;
 mod janelas;
+mod qualidade;
 mod sala;
 mod sessao;
 mod transmissao;
@@ -44,7 +45,7 @@ fn main() {
 ", j.titulo);
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         if let Err(e) = rt.block_on(transmissao::transmitir_janela(
-            j.hwnd, j.pid, &pasta, segundos, 60, 8_000_000,
+            j.hwnd, j.pid, &pasta, segundos, qualidade::padrao(),
         )) {
             eprintln!("falhou: {e}");
             std::process::exit(1);
@@ -84,11 +85,23 @@ fn main() {
             std::process::exit(1);
         };
         let segundos: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(60.0);
-        println!("transmitindo '{}' para a sala...
-", j.titulo);
+        let q = match args.get(3) {
+            Some(nome) => match qualidade::por_id(nome) {
+                Some(q) => q,
+                None => {
+                    eprintln!("qualidade '{nome}' nao existe. as que existem:");
+                    for p in qualidade::PRESETS {
+                        eprintln!("  {:<12} {}", p.id, p.rotulo);
+                    }
+                    std::process::exit(1);
+                }
+            },
+            None => qualidade::padrao(),
+        };
+        println!("transmitindo '{}' para a sala, em {}...", j.titulo, q.rotulo);
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         if let Err(e) = rt.block_on(transmissao::transmitir_na_sala(
-            j.hwnd, j.pid, site, &s, segundos, 60, 8_000_000,
+            j.hwnd, j.pid, site, &s, segundos, q,
         )) {
             eprintln!("falhou: {e}");
             std::process::exit(1);
@@ -358,7 +371,7 @@ fn ao_vivo(args: &[String]) {
         (pacotes, bytes, primeiro)
     });
 
-    match captura::capturar_ao_vivo(j.hwnd, segundos, 60, 8_000_000, envio) {
+    match captura::capturar_ao_vivo(j.hwnd, segundos, qualidade::padrao(), envio) {
         Ok((quadros, nome, hardware)) => {
             let (pacotes, bytes, primeiro) = coletor.join().unwrap_or((0, 0, Vec::new()));
             println!("quadros capturados  {quadros}");
