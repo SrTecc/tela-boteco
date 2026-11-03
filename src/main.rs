@@ -13,6 +13,14 @@ mod audio;
 mod captura;
 mod codificador;
 mod janelas;
+mod qualidade;
+
+/// O endereco do site, num lugar so.
+///
+/// Estava escrito em tres pontos, e a troca de share-portomaldito para
+/// tela-do-boteco mostrou o preco disso: endereco repetido e endereco que
+/// alguem esquece de trocar.
+const SITE: &str = "https://tela-do-boteco.vercel.app";
 mod sala;
 mod sessao;
 mod transmissao;
@@ -44,7 +52,7 @@ fn main() {
 ", j.titulo);
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         if let Err(e) = rt.block_on(transmissao::transmitir_janela(
-            j.hwnd, j.pid, &pasta, segundos, 60, 8_000_000,
+            j.hwnd, j.pid, &pasta, segundos, qualidade::padrao(),
         )) {
             eprintln!("falhou: {e}");
             std::process::exit(1);
@@ -70,7 +78,7 @@ fn main() {
 
     if args[0] == "--transmitir-sala" {
         // O caminho de verdade: a tela indo para a sala do site.
-        let site = "https://share-portomaldito.vercel.app";
+        let site = SITE;
         let Some(s) = sessao::guardada() else {
             eprintln!("sem sessao: roda --entrar primeiro");
             std::process::exit(1);
@@ -84,11 +92,23 @@ fn main() {
             std::process::exit(1);
         };
         let segundos: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(60.0);
-        println!("transmitindo '{}' para a sala...
-", j.titulo);
+        let q = match args.get(3) {
+            Some(nome) => match qualidade::por_id(nome) {
+                Some(q) => q,
+                None => {
+                    eprintln!("qualidade '{nome}' nao existe. as que existem:");
+                    for p in qualidade::PRESETS {
+                        eprintln!("  {:<12} {}", p.id, p.rotulo);
+                    }
+                    std::process::exit(1);
+                }
+            },
+            None => qualidade::padrao(),
+        };
+        println!("transmitindo '{}' para a sala, em {}...", j.titulo, q.rotulo);
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         if let Err(e) = rt.block_on(transmissao::transmitir_na_sala(
-            j.hwnd, j.pid, site, &s, segundos, 60, 8_000_000,
+            j.hwnd, j.pid, site, &s, segundos, q,
         )) {
             eprintln!("falhou: {e}");
             std::process::exit(1);
@@ -99,7 +119,7 @@ fn main() {
     if args[0] == "--sala" {
         // Conferencia da conversa com o site, antes de ligar a transmissao
         // nela: bate o ponto e le a caixa postal uma vez.
-        let site = "https://share-portomaldito.vercel.app";
+        let site = SITE;
         let Some(s) = sessao::guardada() else {
             eprintln!("sem sessao: roda --entrar primeiro");
             std::process::exit(1);
@@ -132,8 +152,7 @@ fn main() {
 
     if args[0] == "--entrar" {
         // Login: abre o navegador e espera a sessao voltar numa porta local.
-        let site = args.get(1).cloned().unwrap_or_else(
-            || "https://share-portomaldito.vercel.app".to_string());
+        let site = args.get(1).cloned().unwrap_or_else(|| SITE.to_string());
         match sessao::guardada() {
             Some(_) => println!("ja ha uma sessao valida guardada."),
             None => match sessao::entrar(&site) {
@@ -358,7 +377,7 @@ fn ao_vivo(args: &[String]) {
         (pacotes, bytes, primeiro)
     });
 
-    match captura::capturar_ao_vivo(j.hwnd, segundos, 60, 8_000_000, envio) {
+    match captura::capturar_ao_vivo(j.hwnd, segundos, qualidade::padrao(), envio) {
         Ok((quadros, nome, hardware)) => {
             let (pacotes, bytes, primeiro) = coletor.join().unwrap_or((0, 0, Vec::new()));
             println!("quadros capturados  {quadros}");
