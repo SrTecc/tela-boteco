@@ -14,6 +14,13 @@ mod captura;
 mod codificador;
 mod janelas;
 mod qualidade;
+
+/// O endereco do site, num lugar so.
+///
+/// Estava escrito em tres pontos, e a troca de share-portomaldito para
+/// tela-do-boteco mostrou o preco disso: endereco repetido e endereco que
+/// alguem esquece de trocar.
+const SITE: &str = "https://tela-do-boteco.vercel.app";
 mod sala;
 mod sessao;
 mod transmissao;
@@ -71,7 +78,7 @@ fn main() {
 
     if args[0] == "--transmitir-sala" {
         // O caminho de verdade: a tela indo para a sala do site.
-        let site = "https://share-portomaldito.vercel.app";
+        let site = SITE;
         let Some(s) = sessao::guardada() else {
             eprintln!("sem sessao: roda --entrar primeiro");
             std::process::exit(1);
@@ -112,7 +119,7 @@ fn main() {
     if args[0] == "--sala" {
         // Conferencia da conversa com o site, antes de ligar a transmissao
         // nela: bate o ponto e le a caixa postal uma vez.
-        let site = "https://share-portomaldito.vercel.app";
+        let site = SITE;
         let Some(s) = sessao::guardada() else {
             eprintln!("sem sessao: roda --entrar primeiro");
             std::process::exit(1);
@@ -145,8 +152,7 @@ fn main() {
 
     if args[0] == "--entrar" {
         // Login: abre o navegador e espera a sessao voltar numa porta local.
-        let site = args.get(1).cloned().unwrap_or_else(
-            || "https://share-portomaldito.vercel.app".to_string());
+        let site = args.get(1).cloned().unwrap_or_else(|| SITE.to_string());
         match sessao::guardada() {
             Some(_) => println!("ja ha uma sessao valida guardada."),
             None => match sessao::entrar(&site) {
