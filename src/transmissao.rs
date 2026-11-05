@@ -50,7 +50,8 @@ pub async fn transmitir_janela(
     // O som do processo dono da janela, codificado em Opus. ComeÃ§a ANTES da
     // negociaÃ§Ã£o porque a captura leva um instante para abrir, e silÃªncio no
     // comeÃ§o da transmissÃ£o Ã© o tipo de coisa que ninguÃ©m entende.
-    let som = somente_som(som, trilha_som, segundos);
+    // A gravacao em arquivo nao tem botao: espera o prazo, como sempre.
+    let som = somente_som(som, trilha_som, segundos, crate::captura::nunca());
 
     negociar(&conexao, pasta).await?;
 
@@ -68,7 +69,8 @@ pub async fn transmitir_janela(
     });
 
     let captura = std::thread::spawn(move || {
-        crate::captura::capturar_ao_vivo(alvo, segundos, qualidade, bruto_envio)
+        crate::captura::capturar_ao_vivo(alvo, segundos, qualidade, bruto_envio,
+            crate::captura::nunca())
     });
 
     let intervalo = Duration::from_secs_f64(1.0 / qualidade.fps as f64);
@@ -108,6 +110,7 @@ fn somente_som(
     som: crate::audio::Som,
     trilha: Arc<TrackLocalStaticSample>,
     segundos: f64,
+    parar_agora: crate::captura::Freio,
 ) -> tokio::task::JoinHandle<u64> {
     tokio::spawn(async move {
         let taxa = crate::audio::TAXA;
@@ -148,7 +151,10 @@ fn somente_som(
         let mut pico_entrada = 0f32;
         let mut bytes_saida = 0u64;
 
-        while std::time::Instant::now() < fim {
+        // O prazo E o freio: com a interface, o prazo e um teto de 12 horas, e
+        // esperar por ele deixaria o botao de baixar a tela pendurado para
+        // sempre (quem espera esta trilha e o fim da transmissao).
+        while std::time::Instant::now() < fim && !parar_agora() {
             match captura.receptor.recv_timeout(Duration::from_millis(100)) {
                 Ok(p) => acumulado.extend_from_slice(&p.amostras),
                 Err(_) => continue,
@@ -489,7 +495,8 @@ pub async fn transmitir_na_sala(
     sessao: &str,
     segundos: f64,
     qualidade: crate::qualidade::Qualidade,
-) -> Result<(), Box<dyn std::error::Error>> {
+    painel: Arc<crate::painel::Painel>,
+) -> Result<String, Box<dyn std::error::Error>> {
     let sala = Arc::new(crate::sala::Sala::nova(site, sessao)?);
 
     // Pede a tela ANTES de montar qualquer coisa: se outra pessoa jÃƒÂ¡ estÃƒÂ¡ no
@@ -498,14 +505,19 @@ pub async fn transmitir_na_sala(
     if !presenca.tela_livre() {
         return Err("outra pessoa jÃƒÂ¡ estÃƒÂ¡ transmitindo nesta sala".into());
     }
-    println!(
-        "sala: {} ({} pessoa(s))",
-        presenca.nome.clone().unwrap_or_default(),
-        presenca.pessoas.len()
-    );
+    painel.marcar_no_ar();
+    painel.anotar_pessoas(presenca.pessoas.len());
 
     let (api, trilha, trilha_som) = montar_fabrica().await?;
-    let som = somente_som(som, Arc::clone(&trilha_som), segundos);
+    let som = somente_som(
+        som,
+        Arc::clone(&trilha_som),
+        segundos,
+        Box::new({
+            let painel = Arc::clone(&painel);
+            move || painel.pediram_para_parar()
+        }),
+    );
 
     // A captura ÃƒÂ© uma sÃƒÂ³, e alimenta todas as conexÃƒÂµes: o quadro ÃƒÂ© codificado
     // UMA vez e a trilha o entrega a quem estiver ligado. Codificar por
@@ -519,20 +531,39 @@ pub async fn transmitir_na_sala(
             }
         }
     });
-    let captura = std::thread::spawn(move || {
-        crate::captura::capturar_ao_vivo(alvo, segundos, qualidade, bruto_envio)
-    });
+    let captura = {
+        let painel = Arc::clone(&painel);
+        std::thread::spawn(move || {
+            crate::captura::capturar_ao_vivo(
+                alvo, segundos, qualidade, bruto_envio,
+                Box::new(move || painel.pediram_para_parar()),
+            )
+        })
+    };
 
     // A batida de presenÃƒÂ§a continua durante toda a transmissÃƒÂ£o: ÃƒÂ© ela que
     // prova ao site, a cada ciclo, que a pessoa continua na call.
     let ponto = {
         let sala = Arc::clone(&sala);
+        let painel = Arc::clone(&painel);
         let ate = std::time::Instant::now() + Duration::from_secs_f64(segundos);
         tokio::spawn(async move {
             while std::time::Instant::now() < ate {
                 tokio::time::sleep(Duration::from_secs(5)).await;
-                if let Err(e) = sala.bater_ponto(true).await {
-                    eprintln!("presenÃƒÂ§a: {e}");
+                // A contagem de gente na sala vem DAQUI enquanto transmite: a
+                // batida de fora fica parada, e o numero dela envelhece.
+                match sala.bater_ponto(true).await {
+                    Ok(p) => {
+                        painel.anotar_pessoas(p.pessoas.len());
+                        painel.dizer("");
+                    }
+                    // Falha de presenca precisa APARECER: sem bater o ponto, o
+                    // site solta a tela em 20 segundos e quem assiste perde a
+                    // imagem sem ninguem entender por que.
+                    Err(e) => {
+                        eprintln!("presenca: {e}");
+                        painel.dizer(format!("nao consegui avisar o site que continuo aqui: {e}"));
+                    }
                 }
             }
         })
@@ -547,6 +578,7 @@ pub async fn transmitir_na_sala(
         let conexoes = Arc::clone(&conexoes);
         let trilha = Arc::clone(&trilha);
         let trilha_som = Arc::clone(&trilha_som);
+        let painel = Arc::clone(&painel);
         let ate = std::time::Instant::now() + Duration::from_secs_f64(segundos);
         tokio::spawn(async move {
             while std::time::Instant::now() < ate {
@@ -562,8 +594,21 @@ pub async fn transmitir_na_sala(
                             }
                         }
                     }
-                    Err(e) => eprintln!("caixa postal: {e}"),
+                    Err(e) => {
+                        eprintln!("caixa postal: {e}");
+                        painel.dizer(format!("nao consegui ler os pedidos de quem assiste: {e}"));
+                    }
                 }
+                // Quem esta LIGADO, e nao quem pediu: conexao que nunca fechou
+                // e um numero que mentiria para a interface, dizendo que ha
+                // gente assistindo enquanto do outro lado a tela esta preta.
+                let ligados = {
+                    let mapa = conexoes.lock().await;
+                    mapa.values()
+                        .filter(|pc| pc.connection_state() == RTCPeerConnectionState::Connected)
+                        .count()
+                };
+                painel.anotar_espectadores(ligados);
                 tokio::time::sleep(Duration::from_millis(1200)).await;
             }
         })
@@ -573,6 +618,8 @@ pub async fn transmitir_na_sala(
     let intervalo = Duration::from_secs_f64(1.0 / qualidade.fps as f64);
     let mut enviados = 0u64;
     while let Some(pacote) = rede_recebe.recv().await {
+        // Antes do write: o pacote e consumido ali dentro.
+        painel.anotar_pacote(pacote.len());
         trilha
             .write_sample(&Sample {
                 data: pacote.into(),
@@ -598,11 +645,13 @@ pub async fn transmitir_na_sala(
     drop(mapa);
     sala.sair().await;
 
-    println!("quadros capturados  {quadros}");
-    println!("pacotes de video    {enviados}");
-    println!("pacotes de som      {pacotes_som}");
-    println!("codificador         {nome} ({})", if hardware { "chip da placa" } else { "CPU" });
-    Ok(())
+    // O relatorio VOLTA, em vez de ser impresso aqui. O executavel e de
+    // janela: println em interface grafica escreve para o nada, e foi para
+    // isso que o painel existe.
+    Ok(format!(
+        "{quadros} quadros, {enviados} pacotes de video, {pacotes_som} de som,          codificados no {}",
+        if hardware { format!("{nome} (chip da placa)") } else { format!("{nome} (CPU)") }
+    ))
 }
 
 /// Um recado da caixa postal.

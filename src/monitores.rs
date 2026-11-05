@@ -73,6 +73,23 @@ unsafe extern "system" fn juntar(
     BOOL(1)
 }
 
+/// Avisa ao Windows que este processo entende tela com escala.
+///
+/// Sem isso o sistema MENTE para ele, por compatibilidade: devolve 1536x864
+/// onde ha 1920x1080 a 125%, e a lista mostraria um tamanho que nao e o da
+/// tela de ninguem. Pior, mentiria so as vezes: a janela do app liga a
+/// consciencia de DPI sozinha, entao o mesmo executavel dizia um tamanho na
+/// linha de comando e outro na interface.
+///
+/// Chamar duas vezes e inofensivo: a segunda falha e e isso.
+pub fn ajustar_dpi() {
+    unsafe {
+        let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+            windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        );
+    }
+}
+
 /// Os monitores, do mais a esquerda para o mais a direita.
 pub fn listar() -> WinResult<Vec<Monitor>> {
     let mut lista: Vec<Monitor> = Vec::new();
