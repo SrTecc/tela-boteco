@@ -49,6 +49,14 @@ Em construção. O que já funciona:
 
 ## A janela
 
+| Parado | No ar |
+|---|---|
+| ![a janela parada](docs/janela.png) | ![a janela transmitindo](docs/janela-no-ar.png) |
+
+As duas são do próprio app se desenhando (ver "Conferir a interface" abaixo). A
+sala e os números da segunda vêm de uma cena de prova, porque a de verdade
+precisaria de gente numa call.
+
 Sem argumento nenhum, o executável abre a interface. A linha de comando
 continua inteira, para medir e diagnosticar: `--listar`, `--vivo`, `--audio`,
 `--sala`, `--entrar` e `--transmitir-sala`.
