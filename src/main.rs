@@ -12,8 +12,56 @@
 mod audio;
 mod captura;
 mod codificador;
+mod fontes;
 mod janelas;
+mod monitores;
 mod qualidade;
+
+/// Resolve o que transmitir a partir do que a pessoa escreveu.
+///
+/// Devolve o alvo, de quem e o som e um nome para mostrar. Janela leva o som
+/// DAQUELE processo; monitor leva tudo menos o Discord, senao quem assiste
+/// ouve a propria voz com atraso e o eco fica insuportavel em segundos.
+fn escolher_fonte(texto: Option<&str>) -> Option<(captura::Alvo, audio::Som, String)> {
+    let js = janelas::listar();
+    let ms = monitores::listar().unwrap_or_default();
+    let rotulos_j: Vec<String> = js.iter().map(|j| format!("{} {}", j.titulo, j.executavel)).collect();
+    let rotulos_m: Vec<String> =
+        ms.iter().enumerate().map(|(i, m)| m.rotulo(i)).collect();
+
+    let texto = texto.unwrap_or("");
+    match fontes::escolher(texto, &rotulos_j, &rotulos_m) {
+        Some(fontes::Escolha::Janela(i)) => {
+            let j = &js[i];
+            Some((captura::Alvo::Janela(j.hwnd), audio::Som::Processo(j.pid), j.titulo.clone()))
+        }
+        Some(fontes::Escolha::Monitor(i)) => {
+            let m = &ms[i];
+            // O Discord aparece na lista de janelas, entao achar o processo
+            // dele nao custa nenhuma API nova.
+            let som = js
+                .iter()
+                .find(|j| j.executavel.eq_ignore_ascii_case("Discord.exe"))
+                .map(|j| audio::Som::TudoMenos(j.pid))
+                .unwrap_or(audio::Som::Nenhum);
+            if som == audio::Som::Nenhum {
+                eprintln!("aviso: nao achei o Discord, entao vai sem som (a tela inteira");
+                eprintln!("       com som inteiro faria quem assiste ouvir a propria voz)");
+            }
+            Some((captura::Alvo::Monitor(m.hmonitor), som, m.rotulo(i)))
+        }
+        None => {
+            eprintln!("nao achei '{texto}'. o que da para transmitir:");
+            for (i, r) in rotulos_m.iter().enumerate() {
+                eprintln!("  tela {:<6} {}", i + 1, r);
+            }
+            for j in js.iter().take(20) {
+                eprintln!("  {:<11} {}", "", j.titulo);
+            }
+            None
+        }
+    }
+}
 
 /// O endereco do site, num lugar so.
 ///
@@ -52,7 +100,9 @@ fn main() {
 ", j.titulo);
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         if let Err(e) = rt.block_on(transmissao::transmitir_janela(
-            j.hwnd, j.pid, &pasta, segundos, qualidade::padrao(),
+            captura::Alvo::Janela(j.hwnd),
+            audio::Som::Processo(j.pid),
+            &pasta, segundos, qualidade::padrao(),
         )) {
             eprintln!("falhou: {e}");
             std::process::exit(1);
@@ -83,13 +133,9 @@ fn main() {
             eprintln!("sem sessao: roda --entrar primeiro");
             std::process::exit(1);
         };
-        let lista = janelas::listar();
-        let alvo = args.get(1).map(|a| a.to_lowercase()).unwrap_or_default();
-        let Some(j) = lista.iter().find(|j| {
-            j.titulo.to_lowercase().contains(&alvo) || j.executavel.to_lowercase().contains(&alvo)
-        }) else {
-            eprintln!("nao achei essa janela");
-            std::process::exit(1);
+        let (alvo, som, nome) = match escolher_fonte(args.get(1).map(String::as_str)) {
+            Some(x) => x,
+            None => std::process::exit(1),
         };
         let segundos: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(60.0);
         let q = match args.get(3) {
@@ -105,10 +151,10 @@ fn main() {
             },
             None => qualidade::padrao(),
         };
-        println!("transmitindo '{}' para a sala, em {}...", j.titulo, q.rotulo);
+        println!("transmitindo '{nome}' para a sala, em {}...", q.rotulo);
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         if let Err(e) = rt.block_on(transmissao::transmitir_na_sala(
-            j.hwnd, j.pid, site, &s, segundos, q,
+            alvo, som, site, &s, segundos, q,
         )) {
             eprintln!("falhou: {e}");
             std::process::exit(1);
@@ -159,6 +205,27 @@ fn main() {
                 Ok(_) => println!("entrou, e a sessao ficou guardada para a proxima."),
                 Err(e) => { eprintln!("falhou: {e}"); std::process::exit(1); }
             },
+        }
+        return;
+    }
+
+    if args[0] == "--listar" {
+        // O que da para transmitir, na mesma ordem e com os mesmos rotulos que
+        // a escolha entende.
+        match monitores::listar() {
+            Ok(ms) => {
+                for (i, m) in ms.iter().enumerate() {
+                    // O dispositivo entra aqui porque duas telas de mesma
+                    // resolucao ficam indistinguiveis so pelo rotulo, e e
+                    // comum ter duas iguais na mesma mesa.
+                    println!("  tela {:<4} {}  [{}]", i + 1, m.rotulo(i), m.dispositivo);
+                }
+            }
+            Err(e) => eprintln!("nao consegui listar os monitores: {e}"),
+        }
+        for j in janelas::listar() {
+            let marca = if j.minimizada { " (minimizada)" } else { "" };
+            println!("  {:<9} {}{}", "", j.titulo, marca);
         }
         return;
     }
@@ -217,7 +284,8 @@ fn main() {
     // transmitir e escolher a fonte de som sao a mesma acao, como no Discord.
     let pid_audio = if arquivo.is_some() { Some(j.pid) } else { None };
 
-    match captura::capturar_janela(j.hwnd, segundos, arquivo.as_deref(), bitrate, pid_audio) {
+    match captura::capturar_janela(
+        captura::Alvo::Janela(j.hwnd), segundos, arquivo.as_deref(), bitrate, pid_audio) {
         Ok(r) => {
             println!("tamanho   {}x{}", r.largura, r.altura);
             println!("quadros   {} em {:.1}s  =>  {:.1} por segundo", r.quadros, r.segundos, r.fps());
@@ -343,19 +411,15 @@ fn ouvir(args: &[String]) {
 /// para olhar o fluxo com outra ferramenta e confirmar que saiu H.264 de
 /// verdade. O produto é a tela indo para quem assiste.
 fn ao_vivo(args: &[String]) {
-    let lista = janelas::listar();
-    let alvo = args.first().map(|s| s.to_lowercase()).unwrap_or_default();
-    let Some(j) = lista
-        .iter()
-        .find(|j| j.titulo.to_lowercase().contains(&alvo) || j.executavel.to_lowercase().contains(&alvo))
-    else {
-        eprintln!("nao achei essa janela");
+    // Mesma resolucao da transmissao: duas listagens paralelas divergiriam na
+    // primeira correcao feita so de um lado.
+    let Some((alvo, _som, nome)) = escolher_fonte(args.first().map(String::as_str)) else {
         std::process::exit(1);
     };
     let segundos: f64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5.0);
     let despejo = args.get(2).cloned();
 
-    println!("capturando '{}' ao vivo por {segundos}s...\n", j.titulo);
+    println!("capturando '{nome}' ao vivo por {segundos}s...\n");
 
     let (envio, recebe) = std::sync::mpsc::channel::<Vec<u8>>();
     let coletor = std::thread::spawn(move || {
@@ -377,7 +441,7 @@ fn ao_vivo(args: &[String]) {
         (pacotes, bytes, primeiro)
     });
 
-    match captura::capturar_ao_vivo(j.hwnd, segundos, qualidade::padrao(), envio) {
+    match captura::capturar_ao_vivo(alvo, segundos, qualidade::padrao(), envio) {
         Ok((quadros, nome, hardware)) => {
             let (pacotes, bytes, primeiro) = coletor.join().unwrap_or((0, 0, Vec::new()));
             println!("quadros capturados  {quadros}");

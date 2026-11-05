@@ -39,8 +39,8 @@ const STUN: &[&str] = &[
 /// A captura roda numa thread sua, o codificador na dele, e aqui sÃ³ se empurra
 /// para a rede o que jÃ¡ saiu pronto. Nenhum arquivo no caminho.
 pub async fn transmitir_janela(
-    hwnd: isize,
-    pid: u32,
+    alvo: crate::captura::Alvo,
+    som: crate::audio::Som,
     pasta: &Path,
     segundos: f64,
     qualidade: crate::qualidade::Qualidade,
@@ -50,7 +50,7 @@ pub async fn transmitir_janela(
     // O som do processo dono da janela, codificado em Opus. ComeÃ§a ANTES da
     // negociaÃ§Ã£o porque a captura leva um instante para abrir, e silÃªncio no
     // comeÃ§o da transmissÃ£o Ã© o tipo de coisa que ninguÃ©m entende.
-    let som = somente_som(pid, trilha_som, segundos);
+    let som = somente_som(som, trilha_som, segundos);
 
     negociar(&conexao, pasta).await?;
 
@@ -68,7 +68,7 @@ pub async fn transmitir_janela(
     });
 
     let captura = std::thread::spawn(move || {
-        crate::captura::capturar_ao_vivo(hwnd, segundos, qualidade, bruto_envio)
+        crate::captura::capturar_ao_vivo(alvo, segundos, qualidade, bruto_envio)
     });
 
     let intervalo = Duration::from_secs_f64(1.0 / qualidade.fps as f64);
@@ -105,7 +105,7 @@ pub async fn transmitir_janela(
 /// pedaÃ§os de tamanho qualquer. Por isso existe o acumulador: juntar atÃ© fechar
 /// um bloco e sÃ³ entÃ£o codificar. Mandar pedaÃ§o solto produz estalo.
 fn somente_som(
-    pid: u32,
+    som: crate::audio::Som,
     trilha: Arc<TrackLocalStaticSample>,
     segundos: f64,
 ) -> tokio::task::JoinHandle<u64> {
@@ -129,7 +129,8 @@ fn somente_som(
             return 0;
         };
 
-        let Ok(captura) = crate::audio::CapturaAudio::iniciar(pid, crate::audio::Modo::Incluir)
+        let Some((pid, modo)) = som.alvo() else { return 0 };
+        let Ok(captura) = crate::audio::CapturaAudio::iniciar(pid, modo)
         else {
             // Som Ã© o motivo do app existir, mas falhar nele nÃ£o derruba a
             // transmissÃ£o: imagem sem som Ã© melhor que nada.
@@ -482,8 +483,8 @@ pub fn separar_em_quadros(bruto: &[u8]) -> Vec<Vec<u8>> {
 /// E sÃƒÂ£o **vÃƒÂ¡rios espectadores**: uma conexÃƒÂ£o por pessoa, com as mesmas duas
 /// trilhas. Ãƒâ€° por isso que o limite da Tela ÃƒÂ© o upload de quem transmite.
 pub async fn transmitir_na_sala(
-    hwnd: isize,
-    pid: u32,
+    alvo: crate::captura::Alvo,
+    som: crate::audio::Som,
     site: &str,
     sessao: &str,
     segundos: f64,
@@ -504,7 +505,7 @@ pub async fn transmitir_na_sala(
     );
 
     let (api, trilha, trilha_som) = montar_fabrica().await?;
-    let som = somente_som(pid, Arc::clone(&trilha_som), segundos);
+    let som = somente_som(som, Arc::clone(&trilha_som), segundos);
 
     // A captura ÃƒÂ© uma sÃƒÂ³, e alimenta todas as conexÃƒÂµes: o quadro ÃƒÂ© codificado
     // UMA vez e a trilha o entrega a quem estiver ligado. Codificar por
@@ -519,7 +520,7 @@ pub async fn transmitir_na_sala(
         }
     });
     let captura = std::thread::spawn(move || {
-        crate::captura::capturar_ao_vivo(hwnd, segundos, qualidade, bruto_envio)
+        crate::captura::capturar_ao_vivo(alvo, segundos, qualidade, bruto_envio)
     });
 
     // A batida de presenÃƒÂ§a continua durante toda a transmissÃƒÂ£o: ÃƒÂ© ela que

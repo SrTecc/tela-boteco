@@ -48,6 +48,33 @@ pub struct Pedaco {
     pub tempo: i64,
 }
 
+/// De quem e o som que vai junto da imagem.
+///
+/// Fica aqui, e nao no transmissor, porque a escolha depende do ALVO: janela
+/// manda o som daquele processo, monitor manda tudo menos as vozes da call.
+/// Quem transmite um monitor com o som inteiro faz quem assiste ouvir a propria
+/// voz com atraso, e o eco e insuportavel em segundos.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Som {
+    /// So aquele processo. O jogo, e nao o Discord.
+    Processo(u32),
+    /// Tudo menos aquele processo. A tela inteira, sem a call.
+    TudoMenos(u32),
+    /// Sem som. Imagem sem som e melhor que transmissao que nao sobe.
+    Nenhum,
+}
+
+impl Som {
+    /// O par (pid, modo) que a captura entende, ou nada.
+    pub fn alvo(&self) -> Option<(u32, Modo)> {
+        match *self {
+            Som::Processo(pid) => Some((pid, Modo::Incluir)),
+            Som::TudoMenos(pid) => Some((pid, Modo::Excluir)),
+            Som::Nenhum => None,
+        }
+    }
+}
+
 /// O que ouvir: só o processo escolhido, ou tudo menos ele.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Modo {
