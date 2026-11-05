@@ -23,7 +23,7 @@ do som. O app é a opção para quem quer o som certo.
 
 | | |
 |---|---|
-| **Rust com interface nativa** | nada de motor de navegador: quem transmite está jogando, e o app não pode disputar memória com o jogo |
+| **Rust com interface nativa** | nada de motor de navegador: quem transmite está jogando, e o app não pode disputar memória com o jogo. A interface é egui, desenhada com OpenGL |
 | **O núcleo não sabe nada da interface** | captura, codificação e rede moram numa biblioteca que a casca só comanda, então trocar a interface não mexe no motor |
 | **Escolher janela ou monitor**, como no Discord | e a janela escolhida entrega o processo, que é de onde o áudio vem |
 | **A janela fecha para a bandeja** | durante o jogo não há interface desenhando nada |
@@ -44,7 +44,46 @@ Em construção. O que já funciona:
 - [x] **Compartilhar a tela ao vivo**: captura, codifica e manda, sem arquivo no caminho
 - [x] Login do Discord, com a sessão voltando para uma porta local
 - [x] Falar o protocolo do site: presença, caixa postal e candidatos em fluxo
-- [ ] Interface e bandeja
+- [x] **Interface**: escolher na lista, içar, baixar, e os números ao vivo
+- [ ] Bandeja e prévia da imagem
+
+## A janela
+
+Sem argumento nenhum, o executável abre a interface. A linha de comando
+continua inteira, para medir e diagnosticar: `--listar`, `--vivo`, `--audio`,
+`--sala`, `--entrar` e `--transmitir-sala`.
+
+```
+tela-boteco                 abre a janela
+tela-boteco --listar        o que da para transmitir, no terminal
+```
+
+O executável é de **janela**, e não de console: ninguém quer uma tela preta
+abrindo junto do aplicativo. Para a linha de comando continuar funcionando, ele
+se pendura no console de quem o chamou (`src/console.rs`); chamado por duplo
+clique não há console pai, a tentativa falha, e é só isso que acontece.
+
+A interface não faz rede nenhuma: login, batida de presença e transmissão moram
+em threads próprias e conversam com a janela por canal e por contadores
+atômicos (`src/painel.rs`). Requisição na thread do desenho trava a janela, e
+janela travada é o que faz um aplicativo parecer quebrado quando ele está só
+esperando.
+
+### Conferir a interface
+
+A janela é desenhada pela placa, então **fotografar a tela não a pega**: o que
+vem é o papel de parede, e o `PrintWindow` devolve o quadro da janela com o
+miolo branco. Quem desenha a foto é o próprio app:
+
+```powershell
+powershell -File scripts/fotos.ps1 -Pasta fotos
+```
+
+Isso roda o app em cada **cena** (`TELA_CENA`) e salva um PNG de cada uma. As
+cenas existem pelo mesmo motivo do preview do site: ver a tela "no ar" de
+verdade exigiria duas pessoas numa call do servidor, e a tela que ninguém olha
+antes é a que sai torta. São seis: `fora`, `parado`, `no-ar`,
+`no-ar-com-erro`, `tomada` e `fora-da-call`.
 
 A escolha do que transmitir entende janela e monitor pelo mesmo texto: `tela`
 pega o monitor principal, `tela 2` pega o segundo da esquerda para a direita, e
@@ -122,6 +161,18 @@ Com som, de ponta a ponta, compartilhando uma janela que toca um tom:
 
 O som vai em **Opus**, e não no AAC do modo de medição: é o codec que o
 WebRTC usa, e navegador nenhum aceita AAC nesse caminho.
+
+E a interface, que é a razão de o app não ser um navegador embrulhado. Com a
+janela aberta e parada, contra um Chrome recém-aberto, com perfil limpo, na
+página do site:
+
+| | Memória privada | Em uso | Processos |
+|---|---|---|---|
+| O app | **84 MB** | 128 MB | 1 |
+| Chrome na página da Tela | 519 MB | 913 MB | 13 |
+
+E o Chrome ali está só mostrando a tela de entrar: nem transmitindo está. O
+executável tem 17 MB, com as duas fontes dentro dele.
 
 ## Compilar
 

@@ -106,6 +106,54 @@ impl Pessoa {
     }
 }
 
+impl Presenca {
+    /// Quem esta com a tela, se alguem estiver.
+    ///
+    /// A interface precisa do NOME, e nao so do "esta livre": "a tela e de
+    /// Fulano agora" explica o botao desligado; "a tela esta ocupada" deixa a
+    /// pessoa clicando.
+    pub fn quem_transmite(&self) -> Option<&Pessoa> {
+        self.pessoas.iter().find(|p| p.esta_transmitindo())
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    fn pessoa(id: &str, transmitindo: Option<bool>) -> Pessoa {
+        Pessoa { user_id: id.into(), nome: Some(id.to_uppercase()), transmitindo }
+    }
+
+    fn presenca(pessoas: Vec<Pessoa>, no_ar: Option<bool>) -> Presenca {
+        Presenca { sala: "canal".into(), nome: Some("Balcao".into()), eu: "eu".into(), pessoas, no_ar }
+    }
+
+    #[test]
+    fn nulo_conta_como_tela_livre() {
+        // O site devolve NULO para quem nunca pediu a tela, e nao false.
+        // Exigir booleano aqui derrubava a leitura inteira.
+        assert!(presenca(vec![], None).tela_livre());
+        assert!(presenca(vec![], Some(true)).tela_livre());
+        assert!(!presenca(vec![], Some(false)).tela_livre());
+    }
+
+    #[test]
+    fn acha_quem_esta_com_a_tela_pelo_nome() {
+        let p = presenca(
+            vec![pessoa("ana", None), pessoa("bia", Some(true)), pessoa("caio", Some(false))],
+            Some(false),
+        );
+        assert_eq!(p.quem_transmite().map(|x| x.user_id.as_str()), Some("bia"));
+    }
+
+    #[test]
+    fn sala_sem_transmissao_nao_tem_dono_da_tela() {
+        let p = presenca(vec![pessoa("ana", None), pessoa("bia", Some(false))], None);
+        assert!(p.quem_transmite().is_none());
+    }
+}
+
 impl Sala {
     pub fn nova(site: &str, sessao: &str) -> Result<Self, Erro> {
         let cliente = reqwest::Client::builder()
