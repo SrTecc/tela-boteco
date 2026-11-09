@@ -508,6 +508,12 @@ pub async fn transmitir_na_sala(
     painel.marcar_no_ar();
     painel.anotar_pessoas(presenca.pessoas.len());
 
+    // A caixa postal guarda o que chegou enquanto o app estava fora, e tudo
+    // ali fala de ligacoes que morreram com a transmissao anterior. Ler e
+    // jogar fora, antes de abrir a camera: responder a pedido de uma vida
+    // passada e o que faz a segunda transmissao nascer quebrada.
+    let _ = sala.ler_sinais().await;
+
     let (api, trilha, trilha_som) = montar_fabrica().await?;
     let som = somente_som(
         som,
@@ -574,10 +580,13 @@ pub async fn transmitir_na_sala(
     // Uma conexÃƒÂ£o por espectador.
     let conexoes: Arc<tokio::sync::Mutex<HashMap<String, Arc<RTCPeerConnection>>>> =
         Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    let ofertas: Arc<tokio::sync::Mutex<HashMap<String, std::time::Instant>>> =
+        Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
     let sinais = {
         let sala = Arc::clone(&sala);
         let conexoes = Arc::clone(&conexoes);
+        let ofertas = Arc::clone(&ofertas);
         let trilha = Arc::clone(&trilha);
         let trilha_som = Arc::clone(&trilha_som);
         let painel = Arc::clone(&painel);
@@ -586,9 +595,9 @@ pub async fn transmitir_na_sala(
             while std::time::Instant::now() < ate {
                 match sala.ler_sinais().await {
                     Ok(recados) => {
-                        for recado in recados {
+                        for recado in um_quero_por_pessoa(recados) {
                             if let Err(e) = tratar_recado(
-                                &recado, &sala, &conexoes, &api, &trilha, &trilha_som,
+                                &recado, &sala, &conexoes, &ofertas, &api, &trilha, &trilha_som,
                             )
                             .await
                             {
@@ -656,11 +665,71 @@ pub async fn transmitir_na_sala(
     ))
 }
 
+/// Quanto tempo uma oferta fica "no ar" antes de valer a pena oferecer de novo.
+///
+/// E o tempo que o recado leva para ir e a resposta para voltar: cada lado le a
+/// caixa postal a cada 1,2 segundo, entao uma ida e volta cabe em menos de tres.
+pub const OFERTA_NO_AR: Duration = Duration::from_secs(3);
+
+/// Vale oferecer a tela a quem pediu?
+///
+/// Tres situacoes, e as tres ja custaram caro:
+///
+/// - **Ligacao de pe**: nao. Oferecer de novo quebra a que funciona, porque a
+///   resposta chega quando este lado ja saiu de `have-local-offer`.
+/// - **Oferta recente**: nao. Quem assiste repete o pedido a cada batida
+///   enquanto nao ve imagem, e a oferta leva uma ida e volta para fechar.
+///   Responder a cada pedido fecha a ligacao que estava quase pronta, e o
+///   proximo pedido fecha a seguinte: nunca converge, e quem assiste fica na
+///   tela preta para sempre.
+/// - **Resto**: sim. Quem pede e nao tem ligacao viva nem oferta no ar esta
+///   dizendo que nao recebeu, e pode ser alguem que recarregou a pagina.
+pub fn vale_oferecer(conectado: bool, desde_a_oferta: Option<Duration>) -> bool {
+    if conectado {
+        return false;
+    }
+    match desde_a_oferta {
+        Some(tempo) => tempo >= OFERTA_NO_AR,
+        None => true,
+    }
+}
+
+/// Um "quero" por pessoa em cada leitura da caixa postal.
+///
+/// A caixa pode trazer uma PILHA deles: quem assiste repete o pedido a cada
+/// batida enquanto nao recebe imagem, e tudo que se acumulou enquanto o app
+/// estava parado chega de uma vez na volta. Tratar a pilha inteira e um tiro no
+/// proprio pe, e foi o defeito real: cada "quero" fecha a ligacao que o
+/// anterior acabou de abrir, e a resposta do primeiro chega para a oferta do
+/// segundo, que ja nao encaixa. Quem assiste fica na tela preta para sempre,
+/// sem erro nenhum, e so voltava recarregando a pagina.
+///
+/// Tudo que nao e "quero" passa inteiro: candidato e resposta sao de ligacoes
+/// diferentes e todos importam.
+pub fn um_quero_por_pessoa(sinais: Vec<crate::sala::Sinal>) -> Vec<crate::sala::Sinal> {
+    let mut ja_pediu: Vec<String> = Vec::new();
+    sinais
+        .into_iter()
+        .filter(|s| {
+            if s.tipo != "quero" {
+                return true;
+            }
+            if ja_pediu.contains(&s.de) {
+                return false;
+            }
+            ja_pediu.push(s.de.clone());
+            true
+        })
+        .collect()
+}
+
 /// Um recado da caixa postal.
 async fn tratar_recado(
     recado: &crate::sala::Sinal,
     sala: &Arc<crate::sala::Sala>,
     conexoes: &Arc<tokio::sync::Mutex<HashMap<String, Arc<RTCPeerConnection>>>>,
+    // Quando saiu a ultima oferta para cada pessoa. Ver `vale_oferecer`.
+    ofertas: &Arc<tokio::sync::Mutex<HashMap<String, std::time::Instant>>>,
     api: &Arc<webrtc::api::API>,
     trilha: &Arc<TrackLocalStaticSample>,
     trilha_som: &Arc<TrackLocalStaticSample>,
@@ -671,19 +740,24 @@ async fn tratar_recado(
         // teria motivo para oferecer.
         "quero" => {
             let mut mapa = conexoes.lock().await;
+            let conectado = mapa
+                .get(&recado.de)
+                .map(|pc| pc.connection_state() == RTCPeerConnectionState::Connected)
+                .unwrap_or(false);
+            let desde_a_oferta = ofertas
+                .lock()
+                .await
+                .get(&recado.de)
+                .map(|quando: &std::time::Instant| quando.elapsed());
+            if !vale_oferecer(conectado, desde_a_oferta) {
+                return Ok(());
+            }
             if let Some(pc) = mapa.get(&recado.de) {
-                // Ligação viva não se renegocia: oferecer de novo faz a
-                // resposta chegar quando este lado já saiu de
-                // `have-local-offer`, e o vídeo fica carregando para sempre.
-                if pc.connection_state() == RTCPeerConnectionState::Connected {
-                    return Ok(());
-                }
-                // Ligação que NUNCA fechou é outra história: a resposta pode
-                // ter se perdido no caminho, e foi o que aconteceu quando a aba
-                // do site comia a caixa postal do aplicativo, porque as duas
-                // são a mesma pessoa. Quem pede de novo está dizendo que não
-                // recebeu; insistir em esperar deixa a pessoa na tela preta.
-                println!("{} pediu de novo e a ligação não fechou: ofereço outra", recado.de);
+                // Chegou aqui com ligação de pé? Então ela não está viva nem é
+                // recente: quem pede de novo está dizendo que não recebeu, e
+                // pode ser alguém que recarregou a página. Do lado de lá a
+                // ligação velha parece viva, e ninguém ofereceria.
+                println!("{} pediu de novo: fecho a antiga e ofereço outra", recado.de);
                 let _ = pc.close().await;
                 mapa.remove(&recado.de);
             }
@@ -699,6 +773,10 @@ async fn tratar_recado(
                 .await?;
             }
             mapa.insert(recado.de.clone(), pc);
+            ofertas
+                .lock()
+                .await
+                .insert(recado.de.clone(), std::time::Instant::now());
             println!("oferta mandada para {}", recado.de);
         }
         "resposta" => {
@@ -838,4 +916,100 @@ async fn montar_fabrica() -> Result<
     Ok((api, trilha, trilha_som))
 }
 
+#[cfg(test)]
+mod testes {
+    use super::*;
+    use crate::sala::Sinal;
 
+    fn sinal(de: &str, tipo: &str) -> Sinal {
+        Sinal { de: de.into(), tipo: tipo.into(), dados: serde_json::Value::Null }
+    }
+
+    #[test]
+    fn ligacao_viva_nao_se_reoferece() {
+        // Oferecer de novo numa que funciona quebra a que funciona.
+        assert!(!vale_oferecer(true, None));
+        assert!(!vale_oferecer(true, Some(Duration::from_secs(60))));
+    }
+
+    #[test]
+    fn oferta_recente_nao_vira_outra_oferta() {
+        // Este e o defeito que deixava quem assiste na tela preta: o pedido se
+        // repete a cada batida enquanto a imagem nao chega, e responder a cada
+        // um fecha a ligacao que estava quase pronta.
+        assert!(!vale_oferecer(false, Some(Duration::from_millis(0))));
+        assert!(!vale_oferecer(false, Some(Duration::from_millis(2_999))));
+    }
+
+    #[test]
+    fn pedido_sem_oferta_no_ar_e_atendido() {
+        // Inclusive de quem ja tinha ligacao: pode ter recarregado a pagina, e
+        // daquele lado ninguem teria motivo para oferecer.
+        assert!(vale_oferecer(false, None));
+        assert!(vale_oferecer(false, Some(Duration::from_secs(3))));
+        assert!(vale_oferecer(false, Some(Duration::from_secs(30))));
+    }
+
+    #[test]
+    fn a_pilha_de_pedidos_da_mesma_pessoa_vira_um_so() {
+        // O defeito real: parar de transmitir e voltar deixava quem assistia na
+        // tela preta. Cada "quero" da pilha fechava a ligacao que o anterior
+        // tinha acabado de abrir.
+        let caixa = vec![
+            sinal("ana", "quero"),
+            sinal("ana", "quero"),
+            sinal("ana", "quero"),
+        ];
+        let sobrou = um_quero_por_pessoa(caixa);
+        assert_eq!(sobrou.len(), 1);
+        assert_eq!(sobrou[0].de, "ana");
+    }
+
+    #[test]
+    fn cada_pessoa_continua_tendo_o_seu_pedido() {
+        // Cortar demais seria pior: quem nao recebe oferta nao ve nada.
+        let caixa = vec![
+            sinal("ana", "quero"),
+            sinal("bia", "quero"),
+            sinal("ana", "quero"),
+            sinal("caio", "quero"),
+        ];
+        let sobrou = um_quero_por_pessoa(caixa);
+        let quem: Vec<&str> = sobrou.iter().map(|s| s.de.as_str()).collect();
+        assert_eq!(quem, vec!["ana", "bia", "caio"]);
+    }
+
+    #[test]
+    fn o_que_nao_e_pedido_passa_inteiro() {
+        // Candidato e resposta sao de ligacoes diferentes, e todos importam:
+        // descartar candidato e perder o caminho de rede.
+        let caixa = vec![
+            sinal("ana", "candidato"),
+            sinal("ana", "candidato"),
+            sinal("ana", "resposta"),
+            sinal("ana", "quero"),
+            sinal("ana", "quero"),
+            sinal("bia", "saiu"),
+        ];
+        let sobrou = um_quero_por_pessoa(caixa);
+        assert_eq!(sobrou.len(), 5);
+        assert_eq!(sobrou.iter().filter(|s| s.tipo == "quero").count(), 1);
+        assert_eq!(sobrou.iter().filter(|s| s.tipo == "candidato").count(), 2);
+    }
+
+    #[test]
+    fn a_ordem_dos_recados_nao_muda() {
+        // A ordem e a da chegada, e ela importa: candidato que vem antes da
+        // descricao remota ja tem quem o guarde, mas trocar a ordem aqui seria
+        // inventar um problema novo.
+        let caixa = vec![
+            sinal("ana", "quero"),
+            sinal("bia", "candidato"),
+            sinal("ana", "quero"),
+            sinal("ana", "resposta"),
+        ];
+        let sobrou = um_quero_por_pessoa(caixa);
+        let tipos: Vec<&str> = sobrou.iter().map(|s| s.tipo.as_str()).collect();
+        assert_eq!(tipos, vec!["quero", "candidato", "resposta"]);
+    }
+}
