@@ -24,6 +24,11 @@ use windows::Win32::Media::MediaFoundation::*;
 
 pub struct Vivo {
     conversor: Conversor,
+    /// A miniatura do que esta indo ao ar, para a janela mostrar. Opcional: a
+    /// linha de comando nao tem onde desenhar.
+    miniatura: Option<crate::previa::Miniatura>,
+    espelho: Option<std::sync::Arc<crate::painel::Espelho>>,
+    proxima_previa: std::time::Instant,
     mft: IMFTransform,
     eventos: Option<IMFMediaEventGenerator>,
     /// Quantos quadros o codificador está pedindo agora. Mandar sem ele pedir
@@ -65,6 +70,7 @@ impl Vivo {
         altura: u32,
         fps: u32,
         bitrate: u32,
+        espelho: Option<std::sync::Arc<crate::painel::Espelho>>,
     ) -> WinResult<Self> {
         unsafe {
             MFStartup(MF_VERSION, MFSTARTUP_FULL)?;
@@ -74,6 +80,16 @@ impl Vivo {
             // placa. Escalar é de graça aqui, e é o que mais alivia a conta.
             let conversor =
                 Conversor::novo(d3d, contexto, larg_entra, alt_entra, largura, altura)?;
+            // A previa e um segundo processador de video, e nao uma segunda
+            // saida do mesmo: o tamanho de saida de um processador e fixo na
+            // criacao dele. Falhar aqui nao impede transmitir, so deixa a
+            // janela sem miniatura.
+            let miniatura = match &espelho {
+                Some(_) => crate::previa::Miniatura::nova(d3d, contexto, larg_entra, alt_entra)
+                    .inspect_err(|e| eprintln!("sem previa: {e}"))
+                    .ok(),
+                None => None,
+            };
             let (mft, nome, em_hardware) = achar_codificador(largura, altura)?;
 
             // Diz em qual placa trabalhar. Sem isto o codificador exige o
@@ -128,6 +144,11 @@ impl Vivo {
 
             Ok(Self {
                 conversor,
+                miniatura,
+                espelho,
+                // Primeira miniatura ja na primeira chegada de quadro: quem
+                // acabou de icar a tela quer ver que ela subiu.
+                proxima_previa: std::time::Instant::now(),
                 mft,
                 eventos,
                 querendo: 0,
@@ -155,9 +176,33 @@ impl Vivo {
     /// nenhum: o codificador trabalha com alguns quadros de atraso, e exigir
     /// resposta imediata seria travar a captura.
     pub fn oferecer(&mut self, textura: &ID3D11Texture2D) -> WinResult<()> {
+        self.espelhar(textura);
         let nv12 = self.conversor.converter(textura)?;
         self.pendente = Some(nv12);
         Ok(())
+    }
+
+    /// Manda uma miniatura para a janela, de vez em quando.
+    ///
+    /// Erro aqui nao derruba nada: a previa e informacao sobre a transmissao,
+    /// e nao a transmissao. Perder a miniatura e perder a conferencia; parar
+    /// por causa dela seria perder o que se estava conferindo.
+    fn espelhar(&mut self, textura: &ID3D11Texture2D) {
+        let agora = std::time::Instant::now();
+        if agora < self.proxima_previa {
+            return;
+        }
+        let (Some(espelho), Some(mini)) = (&self.espelho, &mut self.miniatura) else {
+            return;
+        };
+        if !espelho.quer_quadro() {
+            return;
+        }
+        self.proxima_previa = agora + crate::previa::INTERVALO;
+        match mini.tirar(textura) {
+            Ok(quadro) => espelho.pousar(quadro),
+            Err(e) => eprintln!("previa: {e}"),
+        }
     }
 
     /// Roda o codificador: entrega o que ele pedir e recolhe o que ele tiver.

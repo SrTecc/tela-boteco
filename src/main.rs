@@ -24,6 +24,7 @@ mod interface;
 mod janelas;
 mod monitores;
 mod painel;
+mod previa;
 mod qualidade;
 mod selo;
 mod tema;
@@ -243,6 +244,46 @@ fn main() {
         return;
     }
 
+    if args[0] == "--previa" {
+        // Prova da miniatura: captura por alguns segundos e grava a ULTIMA
+        // que a placa entregou. O caminho dela tem tres lugares para sair
+        // errado sem dar erro (o segundo processador de video, a leitura da
+        // memoria da placa e a sobra no fim de cada linha), e os tres
+        // aparecem na hora em que alguem olha a imagem.
+        let Some((alvo, _som, nome)) = escolher_fonte(args.get(1).map(String::as_str)) else {
+            std::process::exit(1);
+        };
+        let segundos: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(4.0);
+        let arquivo = args.get(3).cloned().unwrap_or_else(|| "previa.bmp".into());
+        let espelho = painel::Espelho::novo();
+        let (envio, recebe) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || while recebe.recv().is_ok() {});
+        println!("capturando '{nome}' por {segundos}s para tirar a miniatura...");
+        if let Err(e) = captura::capturar_ao_vivo(
+            alvo, segundos, qualidade::padrao(), envio, captura::nunca(),
+            Some(espelho.clone()),
+        ) {
+            eprintln!("falhou: {e}");
+            std::process::exit(1);
+        }
+        let mut visto = 0;
+        match espelho.pegar_se_novo(&mut visto) {
+            Some(q) => {
+                let claro = q.rgba.iter().map(|b| *b as u64).sum::<u64>() / q.rgba.len() as u64;
+                println!("miniatura  {}x{}  brilho medio {claro} de 255", q.largura, q.altura);
+                match escrever_bmp(&arquivo, &q) {
+                    Ok(()) => println!("gravada em {arquivo}"),
+                    Err(e) => eprintln!("nao consegui gravar: {e}"),
+                }
+                if claro < 2 {
+                    println!("A MINIATURA VEIO PRETA: a reducao na placa nao pegou a imagem.");
+                }
+            }
+            None => println!("NENHUMA miniatura chegou."),
+        }
+        return;
+    }
+
     if args[0] == "--vivo" {
         ao_vivo(&args[1..]);
         return;
@@ -343,6 +384,36 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// Grava a miniatura num BMP, que e o formato que se escreve sem biblioteca.
+///
+/// So para conferir: nada no produto le ou grava imagem.
+fn escrever_bmp(caminho: &str, q: &crate::painel::Quadro) -> std::io::Result<()> {
+    use std::io::Write;
+    // Cada linha e alinhada em 4 bytes, como no formato.
+    let passo = ((q.largura * 3 + 3) / 4 * 4) as usize;
+    let tamanho_dados = passo * q.altura as usize;
+    let mut saida = Vec::with_capacity(54 + tamanho_dados);
+    saida.extend_from_slice(b"BM");
+    saida.extend_from_slice(&((54 + tamanho_dados) as u32).to_le_bytes());
+    saida.extend_from_slice(&0u32.to_le_bytes());
+    saida.extend_from_slice(&54u32.to_le_bytes());
+    saida.extend_from_slice(&40u32.to_le_bytes());
+    saida.extend_from_slice(&(q.largura as i32).to_le_bytes());
+    // Altura negativa: o BMP e de baixo para cima, e assim se evita inverter.
+    saida.extend_from_slice(&(-(q.altura as i32)).to_le_bytes());
+    saida.extend_from_slice(&1u16.to_le_bytes());
+    saida.extend_from_slice(&24u16.to_le_bytes());
+    saida.extend_from_slice(&[0u8; 24]);
+    for y in 0..q.altura as usize {
+        let linha = &q.rgba[y * q.largura as usize * 4..][..q.largura as usize * 4];
+        for pixel in linha.chunks_exact(4) {
+            saida.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
+        }
+        saida.resize(54 + (y + 1) * passo, 0);
+    }
+    std::fs::File::create(caminho)?.write_all(&saida)
 }
 
 /// Mede o som de um processo. Sem ouvido: o que sai é nível, e nível responde
@@ -454,7 +525,10 @@ fn ao_vivo(args: &[String]) {
         (pacotes, bytes, primeiro)
     });
 
-    match captura::capturar_ao_vivo(alvo, segundos, qualidade::padrao(), envio, captura::nunca()) {
+    // Sem previa: aqui nao ha janela onde desenhar.
+    match captura::capturar_ao_vivo(
+        alvo, segundos, qualidade::padrao(), envio, captura::nunca(), None,
+    ) {
         Ok((quadros, nome, hardware)) => {
             let (pacotes, bytes, primeiro) = coletor.join().unwrap_or((0, 0, Vec::new()));
             println!("quadros capturados  {quadros}");

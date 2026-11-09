@@ -30,6 +30,7 @@ pub struct Painel {
     pessoas: AtomicUsize,
     /// A última linha de situação. Vai para a janela, não para o terminal.
     recado: Mutex<String>,
+    espelho: Arc<Espelho>,
 }
 
 impl Painel {
@@ -92,8 +93,78 @@ impl Painel {
         }
     }
 
+    /// O espelho onde a captura pousa a miniatura do que esta indo ao ar.
+    pub fn espelho(&self) -> Arc<Espelho> {
+        Arc::clone(&self.espelho)
+    }
+
     pub fn recado(&self) -> String {
         self.recado.lock().map(|r| r.clone()).unwrap_or_default()
+    }
+}
+
+/// Um quadro pequeno do que está indo ao ar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Quadro {
+    pub largura: u32,
+    pub altura: u32,
+    /// RGBA, linha a linha e sem sobra no fim da linha.
+    pub rgba: Vec<u8>,
+}
+
+/// Onde o último quadro pousa, para a janela pegar.
+///
+/// **Um só, e não uma fila.** É a mesma regra do codificador: ao vivo, quadro
+/// velho não interessa a ninguém, e enfileirar só faria a prévia mostrar o
+/// passado com atraso crescente.
+#[derive(Default)]
+pub struct Espelho {
+    quadro: Mutex<Option<Quadro>>,
+    /// Se há janela olhando. Fechada para a bandeja, ninguém olha, e aí tirar
+    /// miniatura quatro vezes por segundo seria gastar a placa de quem está
+    /// jogando para desenhar o que ninguém vê — justamente o contrário do que
+    /// a bandeja existe para fazer.
+    olhando: AtomicBool,
+    /// Sobe a cada quadro novo. A janela desenha 60 vezes por segundo e a
+    /// prévia muda 4: sem isto, ela mandaria a mesma imagem para a placa
+    /// quinze vezes à toa.
+    versao: AtomicU64,
+}
+
+impl Espelho {
+    pub fn novo() -> Arc<Self> {
+        let espelho = Self::default();
+        // Começa ligado: quem não sabe desta conversa (a linha de comando) tem
+        // de receber a miniatura do mesmo jeito.
+        espelho.olhando.store(true, Ordering::Relaxed);
+        Arc::new(espelho)
+    }
+
+    /// A janela avisa se está olhando.
+    pub fn olhando(&self, sim: bool) {
+        self.olhando.store(sim, Ordering::Relaxed);
+    }
+
+    /// Vale a pena tirar uma miniatura agora?
+    pub fn quer_quadro(&self) -> bool {
+        self.olhando.load(Ordering::Relaxed)
+    }
+
+    pub fn pousar(&self, quadro: Quadro) {
+        if let Ok(mut lugar) = self.quadro.lock() {
+            *lugar = Some(quadro);
+            self.versao.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    /// O quadro, só se for mais novo que o que quem pergunta já tem.
+    pub fn pegar_se_novo(&self, ultima: &mut u64) -> Option<Quadro> {
+        let agora = self.versao.load(Ordering::Acquire);
+        if agora == *ultima {
+            return None;
+        }
+        *ultima = agora;
+        self.quadro.lock().ok().and_then(|q| q.clone())
     }
 }
 
@@ -210,6 +281,44 @@ mod testes {
         // E cala para sempre: a tela pode parar depois, e o que o aviso
         // responde é "isto nunca funcionou", que é outra pergunta.
         assert!(aviso_de_tela_parada(1, 600.0).is_none());
+    }
+
+    fn quadro(marca: u8) -> Quadro {
+        Quadro { largura: 2, altura: 1, rgba: vec![marca; 8] }
+    }
+
+    #[test]
+    fn o_espelho_entrega_o_quadro_uma_vez_so() {
+        // Mandar a mesma imagem para a placa a cada desenho seria quinze vezes
+        // o trabalho, para a mesma imagem.
+        let e = Espelho::novo();
+        let mut vista = 0;
+        assert_eq!(e.pegar_se_novo(&mut vista), None, "espelho vazio nao devolve nada");
+        e.pousar(quadro(7));
+        assert_eq!(e.pegar_se_novo(&mut vista), Some(quadro(7)));
+        assert_eq!(e.pegar_se_novo(&mut vista), None, "o mesmo quadro nao volta");
+    }
+
+    #[test]
+    fn com_a_janela_escondida_nem_vale_tirar_a_miniatura() {
+        let e = Espelho::novo();
+        assert!(e.quer_quadro(), "sem ninguem dizer nada, tira");
+        e.olhando(false);
+        assert!(!e.quer_quadro());
+        e.olhando(true);
+        assert!(e.quer_quadro());
+    }
+
+    #[test]
+    fn quadro_velho_nao_fila_atras_do_novo() {
+        // Ao vivo, quadro velho nao interessa a ninguem: a janela tem de
+        // pegar o ULTIMO, e nao o primeiro que chegou sem ser lido.
+        let e = Espelho::novo();
+        let mut vista = 0;
+        e.pousar(quadro(1));
+        e.pousar(quadro(2));
+        assert_eq!(e.pegar_se_novo(&mut vista), Some(quadro(2)));
+        assert_eq!(e.pegar_se_novo(&mut vista), None);
     }
 
     #[test]
