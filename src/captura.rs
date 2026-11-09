@@ -17,6 +17,18 @@
 
 /// O que se captura: uma janela ou um monitor inteiro.
 ///
+/// Quem diz "ja deu" para a captura.
+///
+/// A linha de comando passa um prazo e espera; a interface tem um botao de
+/// baixar a tela, e nao pode esperar o prazo. Entao a captura pergunta a cada
+/// volta se alguem pediu para parar, em vez de dormir ate o fim.
+pub type Freio = Box<dyn Fn() -> bool + Send>;
+
+/// O freio de quem nao tem botao: a linha de comando, que espera o prazo.
+pub fn nunca() -> Freio {
+    Box::new(|| false)
+}
+
 /// O Windows Graphics Capture aceita os dois, e a unica diferenca esta em qual
 /// item se cria. Dali para frente o caminho e identico: mesmo pool, mesmo
 /// conversor, mesmo codificador. Por isso a escolha mora num enum e nao em
@@ -115,6 +127,8 @@ pub fn capturar_ao_vivo(
     duracao_seg: f64,
     qualidade: crate::qualidade::Qualidade,
     envio: std::sync::mpsc::Sender<Vec<u8>>,
+    parar_agora: Freio,
+    previa: Option<Arc<crate::painel::Espelho>>,
 ) -> WinResult<(u64, String, bool)> {
     if !GraphicsCaptureSession::IsSupported()? {
         return Err(windows::core::Error::new(
@@ -145,7 +159,7 @@ pub fn capturar_ao_vivo(
 
     let codificador = Arc::new(Mutex::new(crate::vivo::Vivo::novo(
         &d3d, &contexto, larg_entra, alt_entra, largura, altura,
-        qualidade.fps, qualidade.bitrate,
+        qualidade.fps, qualidade.bitrate, previa,
     )?));
     let nome = codificador.lock().unwrap().nome.clone();
     let em_hardware = codificador.lock().unwrap().em_hardware;
@@ -231,7 +245,13 @@ pub fn capturar_ao_vivo(
         });
     }
 
-    std::thread::sleep(std::time::Duration::from_secs_f64(duracao_seg));
+    // O prazo continua valendo como TETO, mas quem manda e o freio: a interface
+    // tem um botao de baixar a tela, e ficar esperando o prazo nao e opcao. Um
+    // decimo de segundo de atraso ninguem percebe num clique.
+    let fim = std::time::Instant::now() + std::time::Duration::from_secs_f64(duracao_seg);
+    while std::time::Instant::now() < fim && !parar_agora() {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
     parar.store(true, Ordering::Relaxed);
     let _ = bomba.join();
     sessao.Close()?;
