@@ -20,7 +20,7 @@
 /// Quem diz "ja deu" para a captura.
 ///
 /// A linha de comando passa um prazo e espera; a interface tem um botao de
-/// baixar a tela, e nao pode esperar o prazo. Entao a captura pergunta a cada
+/// tirar a tela do ar, e nao pode esperar o prazo. Entao a captura pergunta a cada
 /// volta se alguem pediu para parar, em vez de dormir ate o fim.
 pub type Freio = Box<dyn Fn() -> bool + Send>;
 
@@ -246,7 +246,7 @@ pub fn capturar_ao_vivo(
     }
 
     // O prazo continua valendo como TETO, mas quem manda e o freio: a interface
-    // tem um botao de baixar a tela, e ficar esperando o prazo nao e opcao. Um
+    // tem um botao de tirar do ar, e ficar esperando o prazo nao e opcao. Um
     // decimo de segundo de atraso ninguem percebe num clique.
     let fim = std::time::Instant::now() + std::time::Duration::from_secs_f64(duracao_seg);
     while std::time::Instant::now() < fim && !parar_agora() {

@@ -46,6 +46,11 @@ const TITULO: &str = "titulo";
 /// exatamente a cara genérica que o tema existe para não ter.
 const ALFA_SLAB: &[u8] = include_bytes!("../assets/fontes/AlfaSlabOne-Regular.ttf");
 const OSWALD: &[u8] = include_bytes!("../assets/fontes/Oswald-Variable.ttf");
+/// Emoji monocromatico. Nome de canal do Discord quase sempre tem um, e sem
+/// esta fonte ele sai como quadradinho vazio: o salao vira "sala [] [] Escritorio
+/// do Dono". E a mesma solucao dos cards do bot, e pelo mesmo motivo. Colorida
+/// nao serve: o desenhador de texto daqui so rasteriza contorno.
+const EMOJI: &[u8] = include_bytes!("../assets/fontes/NotoEmoji-Regular.ttf");
 
 pub fn aplicar(ctx: &egui::Context) {
     let mut fontes = FontDefinitions::default();
@@ -55,6 +60,9 @@ pub fn aplicar(ctx: &egui::Context) {
     fontes
         .font_data
         .insert(TITULO.into(), Arc::new(FontData::from_static(ALFA_SLAB)));
+    fontes
+        .font_data
+        .insert("emoji".into(), Arc::new(FontData::from_static(EMOJI)));
 
     // A Oswald entra NA FRENTE das de reserva, e não no lugar delas: o que ela
     // não tiver (um emoji no nome de uma janela, por exemplo) cai para a de
@@ -64,9 +72,17 @@ pub fn aplicar(ctx: &egui::Context) {
         .entry(FontFamily::Proportional)
         .or_default()
         .insert(0, "oswald".into());
+    // O emoji entra ATRAS da Oswald, e nao na frente: ele tem glifo para
+    // algarismo e pontuacao, e na frente comeria o texto comum.
     fontes
         .families
-        .insert(FontFamily::Name(TITULO.into()), vec![TITULO.into()]);
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .push("emoji".into());
+    fontes.families.insert(
+        FontFamily::Name(TITULO.into()),
+        vec![TITULO.into(), "emoji".into()],
+    );
     ctx.set_fonts(fontes);
 
     // O app e escuro sempre: o tema da casa e balcao de boteco, e seguir o
