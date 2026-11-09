@@ -15,6 +15,34 @@
 //!   pede. Então o que existe aqui é um contador e um canal, e não um laço
 //!   pedindo quadros.
 
+/// O que se captura: uma janela ou um monitor inteiro.
+///
+/// O Windows Graphics Capture aceita os dois, e a unica diferenca esta em qual
+/// item se cria. Dali para frente o caminho e identico: mesmo pool, mesmo
+/// conversor, mesmo codificador. Por isso a escolha mora num enum e nao em
+/// duas funcoes de captura paralelas, que iriam divergir na primeira correcao
+/// feita so de um lado.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Alvo {
+    Janela(isize),
+    Monitor(isize),
+}
+
+impl Alvo {
+    fn item(&self) -> WinResult<GraphicsCaptureItem> {
+        // A ponte entre o mundo Win32 (HWND, HMONITOR) e o item de captura,
+        // que e WinRT.
+        let interop: IGraphicsCaptureItemInterop =
+            windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
+        unsafe {
+            match *self {
+                Alvo::Janela(h) => interop.CreateForWindow(HWND(h as *mut _)),
+                Alvo::Monitor(h) => interop.CreateForMonitor(HMONITOR(h as *mut _)),
+            }
+        }
+    }
+}
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -26,6 +54,7 @@ use windows::Graphics::Capture::{
 };
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Win32::Foundation::HWND;
+use windows::Win32::Graphics::Gdi::HMONITOR;
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
@@ -82,7 +111,7 @@ impl Resultado {
 ///
 /// Devolve (quadros capturados, nome do codificador, se é hardware).
 pub fn capturar_ao_vivo(
-    hwnd: isize,
+    alvo: Alvo,
     duracao_seg: f64,
     qualidade: crate::qualidade::Qualidade,
     envio: std::sync::mpsc::Sender<Vec<u8>>,
@@ -100,9 +129,7 @@ pub fn capturar_ao_vivo(
         CreateDirect3D11DeviceFromDXGIDevice(&dxgi)?.cast()?
     };
 
-    let interop: IGraphicsCaptureItemInterop =
-        windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
-    let item: GraphicsCaptureItem = unsafe { interop.CreateForWindow(HWND(hwnd as *mut _))? };
+    let item = alvo.item()?;
     let tamanho = item.Size()?;
 
     // Dimensão par: o H.264 amostra a cor de dois em dois pixels.
@@ -232,7 +259,7 @@ pub fn capturar_ao_vivo(
 /// embrulhado porque o aviso de quadro pronto chega numa thread do sistema, e
 /// não nesta: é o Windows que decide quando entregar.
 pub fn capturar_janela(
-    hwnd: isize,
+    alvo: Alvo,
     duracao_seg: f64,
     gravar_em: Option<&str>,
     bitrate: u32,
@@ -253,11 +280,7 @@ pub fn capturar_janela(
     let dispositivo_winrt: windows::Graphics::DirectX::Direct3D11::IDirect3DDevice =
         dispositivo_winrt.cast()?;
 
-    // A ponte entre o HWND (mundo Win32) e o item de captura (mundo WinRT).
-    let interop: IGraphicsCaptureItemInterop =
-        windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
-    let item: GraphicsCaptureItem = unsafe { interop.CreateForWindow(HWND(hwnd as *mut _))? };
-
+    let item = alvo.item()?;
     let tamanho = item.Size()?;
     let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
         &dispositivo_winrt,

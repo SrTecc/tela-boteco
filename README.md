@@ -33,15 +33,24 @@ do som. O app é a opção para quem quer o som certo.
 
 Em construção. O que já funciona:
 
-- [x] Listar as janelas transmissíveis, com o processo dono de cada uma
-- [x] Capturar uma janela (Windows Graphics Capture), sem passar quadro pela CPU
+- [x] Listar o que dá para transmitir: as janelas e **os monitores** (`--listar`)
+- [x] Capturar uma janela **ou um monitor inteiro** (Windows Graphics Capture),
+      sem passar quadro pela CPU
 - [x] Codificar em H.264 pelo chip da placa e gravar em MP4
-- [x] Áudio do processo escolhido, sem o som dos outros
+- [x] Áudio do processo escolhido, sem o som dos outros; e, no monitor, **tudo
+      menos o Discord**, senão quem assiste ouve a própria voz com atraso
+- [x] Presets de qualidade (`leve`, `equilibrado`, `nitido`, `maximo`)
 - [x] Juntar imagem e som (hoje no modo de medição, que grava arquivo)
 - [x] **Compartilhar a tela ao vivo**: captura, codifica e manda, sem arquivo no caminho
 - [x] Login do Discord, com a sessão voltando para uma porta local
 - [x] Falar o protocolo do site: presença, caixa postal e candidatos em fluxo
 - [ ] Interface e bandeja
+
+A escolha do que transmitir entende janela e monitor pelo mesmo texto: `tela`
+pega o monitor principal, `tela 2` pega o segundo da esquerda para a direita, e
+qualquer outra coisa é procurada como pedaço do nome de uma janela. A regra é
+pura e testada (`src/fontes.rs`), porque a interface vai precisar exatamente
+dela: a lista que ela mostra é a mesma que a linha de comando resolve.
 
 ## O que ele é, e o que ele não é
 
