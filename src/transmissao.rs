@@ -70,7 +70,7 @@ pub async fn transmitir_janela(
 
     let captura = std::thread::spawn(move || {
         crate::captura::capturar_ao_vivo(alvo, segundos, qualidade, bruto_envio,
-            crate::captura::nunca())
+            crate::captura::nunca(), None)
     });
 
     let intervalo = Duration::from_secs_f64(1.0 / qualidade.fps as f64);
@@ -532,11 +532,13 @@ pub async fn transmitir_na_sala(
         }
     });
     let captura = {
+        let espelho = painel.espelho();
         let painel = Arc::clone(&painel);
         std::thread::spawn(move || {
             crate::captura::capturar_ao_vivo(
                 alvo, segundos, qualidade, bruto_envio,
                 Box::new(move || painel.pediram_para_parar()),
+                Some(espelho),
             )
         })
     };

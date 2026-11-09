@@ -77,6 +77,18 @@ pub struct Aplicativo {
     /// Última amostra de bytes, para a vazão.
     amostra: (u64, Instant),
     vazao: String,
+    /// A miniatura do que está indo ao ar, já na placa.
+    previa: Option<egui::TextureHandle>,
+    versao_da_previa: u64,
+    /// O nome do que está sendo transmitido, guardado no momento de içar: a
+    /// lista é remontada e pode nem conter mais a fonte.
+    nome_no_ar: String,
+    bandeja: Option<crate::bandeja::Bandeja>,
+    /// O que a bandeja já sabe, para não falar com o Windows a cada desenho.
+    bandeja_no_ar: bool,
+    escondida: bool,
+    /// Pediram para sair com a tela no ar: sai depois de soltar a tela.
+    sair_depois: bool,
 }
 
 /// Abre a janela. Só volta quando ela fecha.
@@ -84,6 +96,11 @@ pub fn abrir() -> eframe::Result {
     let opcoes = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Tela do Boteco")
+            .with_icon(egui::IconData {
+                rgba: crate::selo::icone(64),
+                width: 64,
+                height: 64,
+            })
             .with_inner_size([500.0, 700.0])
             .with_min_inner_size([420.0, 560.0]),
         ..Default::default()
@@ -122,7 +139,17 @@ impl Aplicativo {
             ctx,
             amostra: (0, Instant::now()),
             vazao: String::new(),
+            previa: None,
+            versao_da_previa: 0,
+            nome_no_ar: String::new(),
+            bandeja: None,
+            bandeja_no_ar: false,
+            escondida: false,
+            sair_depois: false,
         };
+        // A bandeja tem de nascer aqui: e esta a thread que bombeia as
+        // mensagens do Windows, e sem bomba o menu dela nao abre.
+        app.bandeja = crate::bandeja::Bandeja::nova(&app.ctx);
         app.atualizar_fontes();
         match std::env::var("TELA_CENA") {
             // Cena de prova: nada de rede, para a tela não mudar debaixo da
@@ -161,6 +188,8 @@ impl Aplicativo {
                     self.painel.anotar_pacote(7_700);
                 }
                 self.painel.anotar_pessoas(4);
+                self.painel.espelho().pousar(padrao_de_prova());
+                self.nome_no_ar = "Tela 2 (principal), 1920x1080".into();
                 self.vazao = "4,9 Mb/s".into();
                 if cena == "no-ar-com-erro" {
                     // A cena que mais importa e a que menos aparece: transmissao
@@ -275,6 +304,11 @@ impl Aplicativo {
         // Painel novo a cada transmissão: contador que começa onde o outro
         // parou é número errado na tela.
         self.painel = Painel::novo();
+        self.nome_no_ar = fonte.rotulo.clone();
+        // Painel novo, espelho novo: a miniatura da transmissão passada não
+        // pode aparecer como se fosse desta.
+        self.previa = None;
+        self.versao_da_previa = 0;
         self.amostra = (0, Instant::now());
         self.vazao = String::new();
         self.relatorio = None;
@@ -307,6 +341,47 @@ impl Aplicativo {
     fn baixar(&mut self) {
         self.painel.pedir_para_parar();
         self.estado = Estado::Baixando;
+    }
+
+    fn esconder(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        self.escondida = true;
+    }
+
+    fn mostrar(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        self.escondida = false;
+    }
+
+    fn atender_bandeja(&mut self, ctx: &egui::Context) {
+        let pedidos = self
+            .bandeja
+            .as_ref()
+            .map(|b| b.pedidos())
+            .unwrap_or_default();
+        for pedido in pedidos {
+            match pedido {
+                crate::bandeja::Pedido::Mostrar => self.mostrar(ctx),
+                crate::bandeja::Pedido::Baixar => {
+                    if matches!(self.estado, Estado::NoAr { .. } | Estado::Icando) {
+                        self.baixar();
+                    }
+                }
+                crate::bandeja::Pedido::Sair => {
+                    // Com a tela no ar, sair sem soltar deixa um transmissor
+                    // fantasma na sala até a poda. Pede para baixar e sai
+                    // quando ela soltar; quem insiste no Sair sai na hora,
+                    // porque transmissao travada nao pode prender o app.
+                    if self.bandeja_no_ar && !self.sair_depois {
+                        self.sair_depois = true;
+                        self.baixar();
+                    } else {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
+        }
     }
 
     fn receber_recados(&mut self) {
@@ -345,9 +420,21 @@ impl Aplicativo {
                 Recado::Acabou(r) => {
                     self.no_ar.store(false, Ordering::Relaxed);
                     self.estado = Estado::Parado;
+                    if self.sair_depois {
+                        self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                     match r {
                         Ok(relatorio) => self.relatorio = Some(relatorio),
-                        Err(e) => self.aviso = Some(e),
+                        Err(e) => {
+                            self.aviso = Some(e);
+                            // A tela caiu com a janela escondida: sem trazer a
+                            // janela de volta, a pessoa só descobre quando
+                            // alguém reclamar na call.
+                            if self.escondida {
+                                let ctx = self.ctx.clone();
+                                self.mostrar(&ctx);
+                            }
+                        }
                     }
                 }
             }
@@ -373,18 +460,48 @@ impl eframe::App for Aplicativo {
         tema::BALCAO.to_normalized_gamma_f32()
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    /// Roda antes de desenhar E **com a janela escondida**, sempre que alguém
+    /// pede um redesenho. É por isso que tudo que não é desenho mora aqui:
+    /// fechada para a bandeja, a janela não pinta um pixel, mas a transmissão
+    /// continua e o menu do ícone precisa continuar respondendo.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.receber_recados();
-        self.focada
-            .store(ui.ctx().input(|i| i.focused), Ordering::Relaxed);
+        self.atender_bandeja(ctx);
+        self.focada.store(ctx.input(|i| i.focused), Ordering::Relaxed);
 
         if matches!(self.estado, Estado::Icando) && self.painel.esta_no_ar() {
             self.estado = Estado::NoAr { desde: Instant::now() };
         }
+        let no_ar = matches!(self.estado, Estado::NoAr { .. } | Estado::Icando);
+        if no_ar != self.bandeja_no_ar {
+            // Só quando muda: isto é uma chamada ao Windows, e aqui se passa
+            // sessenta vezes por segundo.
+            self.bandeja_no_ar = no_ar;
+            if let Some(b) = &self.bandeja {
+                b.mostrar_que_esta_no_ar(no_ar);
+            }
+        }
         if matches!(self.estado, Estado::NoAr { .. }) {
             self.medir_vazao();
         }
+        // Escondida, ninguem esta olhando a previa: a captura para de tirar
+        // miniatura e devolve a placa para o jogo.
+        self.painel.espelho().olhando(!self.escondida && no_ar);
 
+        // O X da janela. Com a tela no ar ele ESCONDE, que é a razão de a
+        // bandeja existir: durante o jogo não deve haver interface nenhuma
+        // desenhando, e a transmissão nunca morou na janela.
+        if ctx.input(|i| i.viewport().close_requested()) {
+            let some_para_a_bandeja =
+                !crate::bandeja::fechar_e_sair(self.bandeja_no_ar) && self.bandeja.is_some();
+            if some_para_a_bandeja {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.esconder(ctx);
+            }
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::Frame::new()
             .fill(tema::BALCAO)
             .inner_margin(14)
@@ -416,9 +533,16 @@ impl Aplicativo {
             return;
         }
 
-        self.bloco_de_fontes(ui);
-        ui.add_space(8.0);
-        self.bloco_de_qualidade(ui);
+        // No ar, a prévia toma o lugar da lista. Não é economia de espaço: a
+        // escolha já foi feita e não dá para trocar no meio, e o que a pessoa
+        // quer ver ali é se o que está indo é o que ela acha que está indo.
+        if matches!(self.estado, Estado::NoAr { .. } | Estado::Icando | Estado::Baixando) {
+            self.bloco_da_previa(ui);
+        } else {
+            self.bloco_de_fontes(ui);
+            ui.add_space(8.0);
+            self.bloco_de_qualidade(ui);
+        }
         ui.add_space(8.0);
         self.bloco_do_balcao(ui);
         self.rodape(ui);
@@ -510,6 +634,72 @@ impl Aplicativo {
             if let Some(alvo) = clicada {
                 self.escolhida = Some(alvo);
             }
+        });
+    }
+
+    fn bloco_da_previa(&mut self, ui: &mut egui::Ui) {
+        if let Some(quadro) = self
+            .painel
+            .espelho()
+            .pegar_se_novo(&mut self.versao_da_previa)
+        {
+            let imagem = egui::ColorImage::from_rgba_unmultiplied(
+                [quadro.largura as usize, quadro.altura as usize],
+                &quadro.rgba,
+            );
+            match &mut self.previa {
+                Some(textura) => textura.set(imagem, egui::TextureOptions::LINEAR),
+                None => {
+                    self.previa = Some(ui.ctx().load_texture(
+                        "previa",
+                        imagem,
+                        egui::TextureOptions::LINEAR,
+                    ))
+                }
+            }
+        }
+
+        tema::bloco().show(ui, |ui| {
+            ui.label(tema::rotulo("o que estão vendo"));
+            ui.add_space(6.0);
+            let largura = ui.available_width();
+            match &self.previa {
+                Some(textura) => {
+                    let [l, a] = textura.size();
+                    let altura = largura * a as f32 / l as f32;
+                    ui.add(
+                        egui::Image::new(egui::load::SizedTexture::new(
+                            textura.id(),
+                            egui::vec2(largura, altura),
+                        ))
+                        .corner_radius(6),
+                    );
+                }
+                // O palco vazio tem a mesma proporção da imagem que vai
+                // chegar: sem isso o bloco cresce de repente e empurra o
+                // botão de baixar a tela para debaixo do dedo de quem clica.
+                None => {
+                    let altura = largura * 9.0 / 16.0;
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(largura, altura),
+                        egui::Sense::hover(),
+                    );
+                    let p = ui.painter();
+                    p.rect_filled(rect, egui::CornerRadius::same(6), tema::FUNDO_FUNDO);
+                    p.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "esperando o primeiro quadro",
+                        egui::TextStyle::Small.resolve(ui.style()),
+                        tema::TINTA_FRACA,
+                    );
+                }
+            }
+            ui.add_space(4.0);
+            ui.label(tema::miudo(legenda_da_previa(
+                &self.nome_no_ar,
+                crate::qualidade::PRESETS[self.qualidade].rotulo,
+            )));
         });
     }
 
@@ -691,6 +881,33 @@ impl Aplicativo {
     }
 }
 
+/// A linha embaixo da prévia. Sem nome, sem o ponto solto na frente.
+pub fn legenda_da_previa(nome: &str, qualidade: &str) -> String {
+    if nome.is_empty() {
+        qualidade.to_string()
+    } else {
+        format!("{nome} · {qualidade}")
+    }
+}
+
+/// Uma imagem de mentira para a cena de prova, com listas na diagonal.
+///
+/// De propósito não parece a tela de ninguém: foto falsa dentro da foto faria
+/// a prova mentir sobre o que o app mostra. O que ela prova é o enquadramento
+/// do bloco, que é o que não dá para conferir sem olhar.
+fn padrao_de_prova() -> painel::Quadro {
+    let (largura, altura) = (320u32, 180u32);
+    let mut rgba = Vec::with_capacity((largura * altura * 4) as usize);
+    for y in 0..altura {
+        for x in 0..largura {
+            let faixa = ((x + y) / 18) % 2 == 0;
+            let cor: [u8; 3] = if faixa { [0x1c, 0x20, 0x24] } else { [0xb9, 0x80, 0x1f] };
+            rgba.extend_from_slice(&[cor[0], cor[1], cor[2], 255]);
+        }
+    }
+    painel::Quadro { largura, altura, rgba }
+}
+
 /// De quanto em quanto tempo perguntar à sala como estão as coisas.
 ///
 /// Cada batida custa uma pergunta ao Discord (o estado de voz da pessoa), e o
@@ -866,6 +1083,12 @@ fn cortado(
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    #[test]
+    fn a_legenda_sem_nome_nao_comeca_com_ponto() {
+        assert_eq!(legenda_da_previa("Elden Ring", "Nítido"), "Elden Ring · Nítido");
+        assert_eq!(legenda_da_previa("", "Nítido"), "Nítido");
+    }
 
     #[test]
     fn a_batida_desacelera_de_lado_e_para_quando_transmite() {

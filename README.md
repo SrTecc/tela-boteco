@@ -45,7 +45,8 @@ Em construção. O que já funciona:
 - [x] Login do Discord, com a sessão voltando para uma porta local
 - [x] Falar o protocolo do site: presença, caixa postal e candidatos em fluxo
 - [x] **Interface**: escolher na lista, içar, baixar, e os números ao vivo
-- [ ] Bandeja e prévia da imagem
+- [x] **Bandeja**: a janela some durante o jogo e a transmissão continua
+- [x] **Prévia**: a miniatura do que está indo ao ar, dentro da janela
 
 ## A janela
 
@@ -77,6 +78,32 @@ atômicos (`src/painel.rs`). Requisição na thread do desenho trava a janela, e
 janela travada é o que faz um aplicativo parecer quebrado quando ele está só
 esperando.
 
+### A bandeja e a prévia
+
+O X da janela faz coisas opostas conforme o estado, e as duas de propósito:
+**transmitindo ele esconde**, e a transmissão continua, porque ela nunca morou
+na janela; **parado ele sai**, porque aplicativo que não está fazendo nada e
+fica morando na bandeja é aplicativo que ninguém pediu, ocupando memória que o
+jogo quer.
+
+O menu da bandeja é curto. Não dá para içar a tela dali: içar exige escolher o
+que transmitir, e escolher sem ver a lista é o jeito de mandar a janela errada
+para o salão. Baixar, sim, que é o que se quer fazer com pressa no meio de uma
+partida.
+
+A **prévia** é a resposta ao pior defeito possível deste app, que já aconteceu:
+transmissão com zero quadro, sem erro nenhum, e do outro lado só tela preta.
+Contador diz que saíram pacotes; só a imagem diz que saiu a imagem certa. Ela
+custa pouco de propósito: a redução é feita na placa pelo mesmo processador de
+vídeo que já converte a imagem, sai quatro vezes por segundo e **para quando a
+janela está escondida**, que é justamente quando ninguém está olhando.
+
+Para conferir a miniatura sem precisar de uma call:
+
+```
+tela-boteco --previa tela 5 previa.bmp
+```
+
 ### Conferir a interface
 
 A janela é desenhada pela placa, então **fotografar a tela não a pega**: o que
@@ -92,6 +119,14 @@ cenas existem pelo mesmo motivo do preview do site: ver a tela "no ar" de
 verdade exigiria duas pessoas numa call do servidor, e a tela que ninguém olha
 antes é a que sai torta. São seis: `fora`, `parado`, `no-ar`,
 `no-ar-com-erro`, `tomada` e `fora-da-call`.
+
+O X da janela não aparece em teste de unidade, porque quem decide ali é o
+Windows mandando o fechamento e o eframe aceitando ou cancelando. Por isso tem
+prova própria, que abre o app, manda fechar e confere o que sobrou:
+
+```powershell
+powershell -File scripts/prova-da-bandeja.ps1
+```
 
 A escolha do que transmitir entende janela e monitor pelo mesmo texto: `tela`
 pega o monitor principal, `tela 2` pega o segundo da esquerda para a direita, e

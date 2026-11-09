@@ -128,6 +128,7 @@ pub fn capturar_ao_vivo(
     qualidade: crate::qualidade::Qualidade,
     envio: std::sync::mpsc::Sender<Vec<u8>>,
     parar_agora: Freio,
+    previa: Option<Arc<crate::painel::Espelho>>,
 ) -> WinResult<(u64, String, bool)> {
     if !GraphicsCaptureSession::IsSupported()? {
         return Err(windows::core::Error::new(
@@ -158,7 +159,7 @@ pub fn capturar_ao_vivo(
 
     let codificador = Arc::new(Mutex::new(crate::vivo::Vivo::novo(
         &d3d, &contexto, larg_entra, alt_entra, largura, altura,
-        qualidade.fps, qualidade.bitrate,
+        qualidade.fps, qualidade.bitrate, previa,
     )?));
     let nome = codificador.lock().unwrap().nome.clone();
     let em_hardware = codificador.lock().unwrap().em_hardware;
