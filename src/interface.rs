@@ -1,4 +1,4 @@
-//! A janela: escolher o que transmitir, içar e baixar a tela.
+//! A janela: escolher o que transmitir, botar e tirar a tela do ar.
 //!
 //! Três regras organizam este arquivo, e as três existem porque a interface
 //! desenha dezenas de vezes por segundo:
@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use crate::painel::{self, Painel};
 use crate::tema;
 
-/// Teto de uma transmissão. Quem manda é o botão de baixar a tela; isto é só
+/// Teto de uma transmissão. Quem manda é o botão de tirar do ar; isto é só
 /// para um app esquecido aberto não ficar transmitindo a madrugada inteira.
 const TETO_SEGUNDOS: f64 = 12.0 * 3600.0;
 
@@ -35,12 +35,12 @@ enum Estado {
     Entrando,
     Parado,
     /// Pediu a tela ao site e está montando a transmissão.
-    Icando,
+    Subindo,
     NoAr {
         desde: Instant,
     },
     /// Pediu para parar e está arrumando a casa (soltando a tela no site).
-    Baixando,
+    Saindo,
 }
 
 /// O que a janela mostra da sala, já resumido pela thread que perguntou.
@@ -175,7 +175,11 @@ impl Aplicativo {
         }
         self.estado = Estado::Parado;
         self.sala = Some(Resumo {
-            nome: "balcão".into(),
+            // Com emoji de proposito: nome de canal do Discord quase sempre
+            // tem um, e sem a fonte de emoji ele sai como quadradinho vazio.
+            // Deixando um aqui, qualquer foto de cena denuncia se a cadeia de
+            // fontes quebrar.
+            nome: "🍺 balcão".into(),
             quantos: 4,
             dono_da_tela: None,
         });
@@ -290,7 +294,7 @@ impl Aplicativo {
         });
     }
 
-    fn icar(&mut self) {
+    fn botar_no_ar(&mut self) {
         let Some(alvo) = self.escolhida else { return };
         let Some(fonte) = self.fontes.iter().find(|f| f.alvo == alvo).cloned() else {
             self.aviso = Some("essa fonte não está mais aberta".into());
@@ -313,7 +317,7 @@ impl Aplicativo {
         self.vazao = String::new();
         self.relatorio = None;
         self.aviso = None;
-        self.estado = Estado::Icando;
+        self.estado = Estado::Subindo;
         self.no_ar.store(true, Ordering::Relaxed);
 
         let qualidade = crate::qualidade::PRESETS[self.qualidade];
@@ -338,9 +342,9 @@ impl Aplicativo {
         });
     }
 
-    fn baixar(&mut self) {
+    fn tirar_do_ar(&mut self) {
         self.painel.pedir_para_parar();
-        self.estado = Estado::Baixando;
+        self.estado = Estado::Saindo;
     }
 
     fn esconder(&mut self, ctx: &egui::Context) {
@@ -363,19 +367,19 @@ impl Aplicativo {
         for pedido in pedidos {
             match pedido {
                 crate::bandeja::Pedido::Mostrar => self.mostrar(ctx),
-                crate::bandeja::Pedido::Baixar => {
-                    if matches!(self.estado, Estado::NoAr { .. } | Estado::Icando) {
-                        self.baixar();
+                crate::bandeja::Pedido::Tirar => {
+                    if matches!(self.estado, Estado::NoAr { .. } | Estado::Subindo) {
+                        self.tirar_do_ar();
                     }
                 }
                 crate::bandeja::Pedido::Sair => {
-                    // Com a tela no ar, sair sem soltar deixa um transmissor
-                    // fantasma na sala até a poda. Pede para baixar e sai
+                    // Com a tela no ar, sair sem tirar deixa um transmissor
+                    // fantasma na sala até a poda. Pede para tirar do ar e sai
                     // quando ela soltar; quem insiste no Sair sai na hora,
                     // porque transmissao travada nao pode prender o app.
                     if self.bandeja_no_ar && !self.sair_depois {
                         self.sair_depois = true;
-                        self.baixar();
+                        self.tirar_do_ar();
                     } else {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
@@ -469,10 +473,10 @@ impl eframe::App for Aplicativo {
         self.atender_bandeja(ctx);
         self.focada.store(ctx.input(|i| i.focused), Ordering::Relaxed);
 
-        if matches!(self.estado, Estado::Icando) && self.painel.esta_no_ar() {
+        if matches!(self.estado, Estado::Subindo) && self.painel.esta_no_ar() {
             self.estado = Estado::NoAr { desde: Instant::now() };
         }
-        let no_ar = matches!(self.estado, Estado::NoAr { .. } | Estado::Icando);
+        let no_ar = matches!(self.estado, Estado::NoAr { .. } | Estado::Subindo);
         if no_ar != self.bandeja_no_ar {
             // Só quando muda: isto é uma chamada ao Windows, e aqui se passa
             // sessenta vezes por segundo.
@@ -516,7 +520,7 @@ impl eframe::App for Aplicativo {
 
         // Enquanto há número mudando na tela, redesenha sozinha. Parada, a
         // janela não gasta nada: egui só desenha quando acontece algo.
-        if matches!(self.estado, Estado::NoAr { .. } | Estado::Icando | Estado::Baixando) {
+        if matches!(self.estado, Estado::NoAr { .. } | Estado::Subindo | Estado::Saindo) {
             ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
     }
@@ -536,7 +540,7 @@ impl Aplicativo {
         // No ar, a prévia toma o lugar da lista. Não é economia de espaço: a
         // escolha já foi feita e não dá para trocar no meio, e o que a pessoa
         // quer ver ali é se o que está indo é o que ela acha que está indo.
-        if matches!(self.estado, Estado::NoAr { .. } | Estado::Icando | Estado::Baixando) {
+        if matches!(self.estado, Estado::NoAr { .. } | Estado::Subindo | Estado::Saindo) {
             self.bloco_da_previa(ui);
         } else {
             self.bloco_de_fontes(ui);
@@ -560,8 +564,8 @@ impl Aplicativo {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (texto, cor) = match self.estado {
                     Estado::NoAr { .. } => ("NO AR", tema::BRASA),
-                    Estado::Icando => ("içando", tema::AMBAR),
-                    Estado::Baixando => ("baixando", tema::AMBAR),
+                    Estado::Subindo => ("subindo", tema::AMBAR),
+                    Estado::Saindo => ("saindo", tema::AMBAR),
                     Estado::Entrando => ("entrando", tema::AMBAR),
                     Estado::Fora => ("fora", tema::TINTA_FRACA),
                     Estado::Parado => ("parado", tema::TINTA_FRACA),
@@ -677,7 +681,7 @@ impl Aplicativo {
                 }
                 // O palco vazio tem a mesma proporção da imagem que vai
                 // chegar: sem isso o bloco cresce de repente e empurra o
-                // botão de baixar a tela para debaixo do dedo de quem clica.
+                // botão de tirar do ar para debaixo do dedo de quem clica.
                 None => {
                     let altura = largura * 9.0 / 16.0;
                     let (rect, _) = ui.allocate_exact_size(
@@ -800,26 +804,26 @@ impl Aplicativo {
     fn botao_grande(&mut self, ui: &mut egui::Ui, tela_tomada: bool) {
         let largura = ui.available_width();
         match self.estado {
-            Estado::NoAr { .. } | Estado::Icando => {
+            Estado::NoAr { .. } | Estado::Subindo => {
                 let botao = egui::Button::new(
-                    egui::RichText::new("Baixar a tela").color(tema::TINTA),
+                    egui::RichText::new("Tirar do ar").color(tema::TINTA),
                 )
                 .fill(tema::PAINEL_ALTO)
                 .stroke(egui::Stroke::new(1.0, tema::BRASA));
                 if ui.add_sized([largura, 42.0], botao).clicked() {
-                    self.baixar();
+                    self.tirar_do_ar();
                 }
             }
-            Estado::Baixando => {
+            Estado::Saindo => {
                 ui.add_enabled(
                     false,
-                    egui::Button::new("soltando a tela…").min_size(egui::vec2(largura, 42.0)),
+                    egui::Button::new("tirando do ar…").min_size(egui::vec2(largura, 42.0)),
                 );
             }
             _ => {
                 let pode = self.escolhida.is_some() && self.sala.is_some() && !tela_tomada;
                 let botao = egui::Button::new(
-                    egui::RichText::new("Içar a tela").color(tema::BALCAO).strong(),
+                    egui::RichText::new("Botar no ar").color(tema::BALCAO).strong(),
                 )
                 .fill(tema::AMBAR);
                 if ui
@@ -827,7 +831,7 @@ impl Aplicativo {
                     .inner
                     .clicked()
                 {
-                    self.icar();
+                    self.botar_no_ar();
                 }
             }
         }
@@ -839,7 +843,7 @@ impl Aplicativo {
         // O que a transmissao nao consegue fazer aparece AQUI. Antes isso ia
         // para o terminal, que num aplicativo de janela e o mesmo que nao ir a
         // lugar nenhum.
-        if matches!(self.estado, Estado::Icando | Estado::NoAr { .. }) {
+        if matches!(self.estado, Estado::Subindo | Estado::NoAr { .. }) {
             let recado = self.painel.recado();
             if !recado.is_empty() {
                 faixa(ui, &recado, tema::AMBAR);

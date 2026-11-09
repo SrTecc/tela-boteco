@@ -44,7 +44,7 @@ Em construção. O que já funciona:
 - [x] **Compartilhar a tela ao vivo**: captura, codifica e manda, sem arquivo no caminho
 - [x] Login do Discord, com a sessão voltando para uma porta local
 - [x] Falar o protocolo do site: presença, caixa postal e candidatos em fluxo
-- [x] **Interface**: escolher na lista, içar, baixar, e os números ao vivo
+- [x] **Interface**: escolher na lista, botar no ar, tirar do ar, e os números ao vivo
 - [x] **Bandeja**: a janela some durante o jogo e a transmissão continua
 - [x] **Prévia**: a miniatura do que está indo ao ar, dentro da janela
 
@@ -86,10 +86,10 @@ na janela; **parado ele sai**, porque aplicativo que não está fazendo nada e
 fica morando na bandeja é aplicativo que ninguém pediu, ocupando memória que o
 jogo quer.
 
-O menu da bandeja é curto. Não dá para içar a tela dali: içar exige escolher o
-que transmitir, e escolher sem ver a lista é o jeito de mandar a janela errada
-para o salão. Baixar, sim, que é o que se quer fazer com pressa no meio de uma
-partida.
+O menu da bandeja é curto. Não dá para botar a tela no ar dali: isso exige
+escolher o que transmitir, e escolher sem ver a lista é o jeito de mandar a
+janela errada para o salão. Tirar do ar, sim, que é o que se quer fazer com
+pressa no meio de uma partida.
 
 A **prévia** é a resposta ao pior defeito possível deste app, que já aconteceu:
 transmissão com zero quadro, sem erro nenhum, e do outro lado só tela preta.

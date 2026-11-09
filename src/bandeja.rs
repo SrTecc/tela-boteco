@@ -5,9 +5,9 @@
 //! desenhando. Fechada para a bandeja, a janela não pinta um pixel, e a
 //! transmissão continua porque ela nunca morou ali.
 //!
-//! O menu é curto de propósito. **Não dá para içar a tela daqui**: içar exige
+//! O menu é curto de propósito. **Não dá para botar a tela no ar daqui**: isso exige
 //! escolher o que transmitir, e escolher sem ver a lista é o jeito de mandar a
-//! janela errada para o salão. Baixar, sim: é o que se quer fazer com pressa,
+//! janela errada para o salão. Tirar do ar, sim: é o que se quer fazer com pressa,
 //! no meio de uma partida.
 
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
@@ -17,14 +17,14 @@ use tray_icon::{TrayIcon, TrayIconBuilder, TrayIconEvent};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pedido {
     Mostrar,
-    Baixar,
+    Tirar,
     Sair,
 }
 
 pub struct Bandeja {
     /// Guardado porque soltar o ícone o apaga da bandeja. Não é campo morto.
     _icone: TrayIcon,
-    baixar: MenuItem,
+    tirar: MenuItem,
     recebe: std::sync::mpsc::Receiver<Pedido>,
 }
 
@@ -37,10 +37,10 @@ impl Bandeja {
     pub fn nova(ctx: &eframe::egui::Context) -> Option<Self> {
         let menu = Menu::new();
         let abrir = MenuItem::new("Abrir a janela", true, None);
-        let baixar = MenuItem::new("Baixar a tela", false, None);
+        let tirar = MenuItem::new("Tirar a tela do ar", false, None);
         let sair = MenuItem::new("Sair", true, None);
         menu.append(&abrir).ok()?;
-        menu.append(&baixar).ok()?;
+        menu.append(&tirar).ok()?;
         menu.append(&PredefinedMenuItem::separator()).ok()?;
         menu.append(&sair).ok()?;
 
@@ -49,7 +49,7 @@ impl Bandeja {
         // remetente de canal não é. O cadeado nunca é disputado: quem fala
         // aqui é a thread das mensagens do Windows, uma só.
         let correio = std::sync::Mutex::new(manda.clone());
-        let ids = (abrir.id().clone(), baixar.id().clone(), sair.id().clone());
+        let ids = (abrir.id().clone(), tirar.id().clone(), sair.id().clone());
         let acorda = ctx.clone();
         // Tratador em vez do canal pronto da biblioteca: ele é global, e
         // quando existe um tratador o canal dela não recebe mais nada. Além
@@ -89,7 +89,7 @@ impl Bandeja {
 
         Some(Self {
             _icone: bandeja,
-            baixar,
+            tirar,
             recebe,
         })
     }
@@ -99,10 +99,10 @@ impl Bandeja {
         self.recebe.try_iter().collect()
     }
 
-    /// Só dá para baixar a tela quando há tela no ar. Item que não faz nada é
+    /// Só dá para tirar do ar quando há tela no ar. Item que não faz nada é
     /// pior que item que não existe: a pessoa clica e fica sem resposta.
     pub fn mostrar_que_esta_no_ar(&self, no_ar: bool) {
-        self.baixar.set_enabled(no_ar);
+        self.tirar.set_enabled(no_ar);
     }
 }
 
@@ -111,7 +111,7 @@ fn classificar(id: &MenuId, ids: &(MenuId, MenuId, MenuId)) -> Option<Pedido> {
     if id == &ids.0 {
         Some(Pedido::Mostrar)
     } else if id == &ids.1 {
-        Some(Pedido::Baixar)
+        Some(Pedido::Tirar)
     } else if id == &ids.2 {
         Some(Pedido::Sair)
     } else {
@@ -148,11 +148,11 @@ mod testes {
     fn cada_item_do_menu_vira_o_seu_pedido() {
         let ids = (
             MenuId::new("abrir"),
-            MenuId::new("baixar"),
+            MenuId::new("tirar"),
             MenuId::new("sair"),
         );
         assert_eq!(classificar(&ids.0, &ids), Some(Pedido::Mostrar));
-        assert_eq!(classificar(&ids.1, &ids), Some(Pedido::Baixar));
+        assert_eq!(classificar(&ids.1, &ids), Some(Pedido::Tirar));
         assert_eq!(classificar(&ids.2, &ids), Some(Pedido::Sair));
     }
 
@@ -163,7 +163,7 @@ mod testes {
         // sair do app por causa de um clique que não era nosso.
         let ids = (
             MenuId::new("abrir"),
-            MenuId::new("baixar"),
+            MenuId::new("tirar"),
             MenuId::new("sair"),
         );
         assert_eq!(classificar(&MenuId::new("outro"), &ids), None);

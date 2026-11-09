@@ -38,7 +38,7 @@ impl Painel {
         Arc::new(Self::default())
     }
 
-    /// O botão de baixar a tela. Não mata nada: avisa.
+    /// O botão de tirar do ar. Não mata nada: avisa.
     pub fn pedir_para_parar(&self) {
         self.parar.store(true, Ordering::Relaxed);
     }

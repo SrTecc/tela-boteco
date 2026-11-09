@@ -152,7 +152,7 @@ fn somente_som(
         let mut bytes_saida = 0u64;
 
         // O prazo E o freio: com a interface, o prazo e um teto de 12 horas, e
-        // esperar por ele deixaria o botao de baixar a tela pendurado para
+        // esperar por ele deixaria o botao de tirar do ar pendurado para
         // sempre (quem espera esta trilha e o fim da transmissao).
         while std::time::Instant::now() < fim && !parar_agora() {
             match captura.receptor.recv_timeout(Duration::from_millis(100)) {
