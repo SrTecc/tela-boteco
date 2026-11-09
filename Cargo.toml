@@ -44,6 +44,12 @@ rusty-opus = "1.0"
 # DX12 nenhum, e ainda e o caminho mais magro dos dois.
 eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts"] }
 
+# O icone ao lado do relogio. Sem features: as que vem ligadas sao do Linux
+# (appindicator, gtk) e aqui nao compilam nada. Ele fala com o Windows pela
+# windows-sys, que e outra crate que nao a nossa windows, entao nao ha briga
+# de versao como houve com o wgpu.
+tray-icon = { version = "0.26", default-features = false }
+
 # As APIs do Windows em Rust. As features sÃ£o escolhidas uma a uma de
 # propÃ³sito: a crate inteira Ã© enorme, e cada mÃ³dulo ligado custa tempo de
 # compilaÃ§Ã£o. Este primeiro marco sÃ³ precisa enumerar janelas e descobrir o

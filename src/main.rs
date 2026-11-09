@@ -15,6 +15,7 @@
 #![windows_subsystem = "windows"]
 
 mod audio;
+mod bandeja;
 mod captura;
 mod codificador;
 mod console;
@@ -24,6 +25,7 @@ mod janelas;
 mod monitores;
 mod painel;
 mod qualidade;
+mod selo;
 mod tema;
 
 /// Resolve o que transmitir a partir do que a pessoa escreveu.

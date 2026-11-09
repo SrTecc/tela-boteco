@@ -77,6 +77,12 @@ pub struct Aplicativo {
     /// Última amostra de bytes, para a vazão.
     amostra: (u64, Instant),
     vazao: String,
+    bandeja: Option<crate::bandeja::Bandeja>,
+    /// O que a bandeja já sabe, para não falar com o Windows a cada desenho.
+    bandeja_no_ar: bool,
+    escondida: bool,
+    /// Pediram para sair com a tela no ar: sai depois de soltar a tela.
+    sair_depois: bool,
 }
 
 /// Abre a janela. Só volta quando ela fecha.
@@ -84,6 +90,11 @@ pub fn abrir() -> eframe::Result {
     let opcoes = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Tela do Boteco")
+            .with_icon(egui::IconData {
+                rgba: crate::selo::icone(64),
+                width: 64,
+                height: 64,
+            })
             .with_inner_size([500.0, 700.0])
             .with_min_inner_size([420.0, 560.0]),
         ..Default::default()
@@ -122,7 +133,14 @@ impl Aplicativo {
             ctx,
             amostra: (0, Instant::now()),
             vazao: String::new(),
+            bandeja: None,
+            bandeja_no_ar: false,
+            escondida: false,
+            sair_depois: false,
         };
+        // A bandeja tem de nascer aqui: e esta a thread que bombeia as
+        // mensagens do Windows, e sem bomba o menu dela nao abre.
+        app.bandeja = crate::bandeja::Bandeja::nova(&app.ctx);
         app.atualizar_fontes();
         match std::env::var("TELA_CENA") {
             // Cena de prova: nada de rede, para a tela não mudar debaixo da
@@ -309,6 +327,47 @@ impl Aplicativo {
         self.estado = Estado::Baixando;
     }
 
+    fn esconder(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        self.escondida = true;
+    }
+
+    fn mostrar(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        self.escondida = false;
+    }
+
+    fn atender_bandeja(&mut self, ctx: &egui::Context) {
+        let pedidos = self
+            .bandeja
+            .as_ref()
+            .map(|b| b.pedidos())
+            .unwrap_or_default();
+        for pedido in pedidos {
+            match pedido {
+                crate::bandeja::Pedido::Mostrar => self.mostrar(ctx),
+                crate::bandeja::Pedido::Baixar => {
+                    if matches!(self.estado, Estado::NoAr { .. } | Estado::Icando) {
+                        self.baixar();
+                    }
+                }
+                crate::bandeja::Pedido::Sair => {
+                    // Com a tela no ar, sair sem soltar deixa um transmissor
+                    // fantasma na sala até a poda. Pede para baixar e sai
+                    // quando ela soltar; quem insiste no Sair sai na hora,
+                    // porque transmissao travada nao pode prender o app.
+                    if self.bandeja_no_ar && !self.sair_depois {
+                        self.sair_depois = true;
+                        self.baixar();
+                    } else {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
+        }
+    }
+
     fn receber_recados(&mut self) {
         while let Ok(recado) = self.recebe.try_recv() {
             match recado {
@@ -345,9 +404,21 @@ impl Aplicativo {
                 Recado::Acabou(r) => {
                     self.no_ar.store(false, Ordering::Relaxed);
                     self.estado = Estado::Parado;
+                    if self.sair_depois {
+                        self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                     match r {
                         Ok(relatorio) => self.relatorio = Some(relatorio),
-                        Err(e) => self.aviso = Some(e),
+                        Err(e) => {
+                            self.aviso = Some(e);
+                            // A tela caiu com a janela escondida: sem trazer a
+                            // janela de volta, a pessoa só descobre quando
+                            // alguém reclamar na call.
+                            if self.escondida {
+                                let ctx = self.ctx.clone();
+                                self.mostrar(&ctx);
+                            }
+                        }
                     }
                 }
             }
@@ -373,18 +444,45 @@ impl eframe::App for Aplicativo {
         tema::BALCAO.to_normalized_gamma_f32()
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    /// Roda antes de desenhar E **com a janela escondida**, sempre que alguém
+    /// pede um redesenho. É por isso que tudo que não é desenho mora aqui:
+    /// fechada para a bandeja, a janela não pinta um pixel, mas a transmissão
+    /// continua e o menu do ícone precisa continuar respondendo.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.receber_recados();
-        self.focada
-            .store(ui.ctx().input(|i| i.focused), Ordering::Relaxed);
+        self.atender_bandeja(ctx);
+        self.focada.store(ctx.input(|i| i.focused), Ordering::Relaxed);
 
         if matches!(self.estado, Estado::Icando) && self.painel.esta_no_ar() {
             self.estado = Estado::NoAr { desde: Instant::now() };
+        }
+        let no_ar = matches!(self.estado, Estado::NoAr { .. } | Estado::Icando);
+        if no_ar != self.bandeja_no_ar {
+            // Só quando muda: isto é uma chamada ao Windows, e aqui se passa
+            // sessenta vezes por segundo.
+            self.bandeja_no_ar = no_ar;
+            if let Some(b) = &self.bandeja {
+                b.mostrar_que_esta_no_ar(no_ar);
+            }
         }
         if matches!(self.estado, Estado::NoAr { .. }) {
             self.medir_vazao();
         }
 
+        // O X da janela. Com a tela no ar ele ESCONDE, que é a razão de a
+        // bandeja existir: durante o jogo não deve haver interface nenhuma
+        // desenhando, e a transmissão nunca morou na janela.
+        if ctx.input(|i| i.viewport().close_requested()) {
+            let some_para_a_bandeja =
+                !crate::bandeja::fechar_e_sair(self.bandeja_no_ar) && self.bandeja.is_some();
+            if some_para_a_bandeja {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.esconder(ctx);
+            }
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::Frame::new()
             .fill(tema::BALCAO)
             .inner_margin(14)
