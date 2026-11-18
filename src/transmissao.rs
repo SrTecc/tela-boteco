@@ -569,6 +569,10 @@ pub async fn transmitir_na_sala(
                     // site solta a tela em 20 segundos e quem assiste perde a
                     // imagem sem ninguem entender por que.
                     Err(e) => {
+                        if let Some(motivo) = acaba_a_transmissao(&e) {
+                            painel.parar_porque(motivo);
+                            break;
+                        }
                         eprintln!("presenca: {e}");
                         painel.dizer(format!("nao consegui avisar o site que continuo aqui: {e}"));
                     }
@@ -656,6 +660,14 @@ pub async fn transmitir_na_sala(
     drop(mapa);
     sala.sair().await;
 
+    // Parou por conta propria? Entao o que volta e o MOTIVO, nao o relatorio.
+    // A janela trata erro diferente de fim normal: mostra o aviso e se
+    // desesconde da bandeja para contar, que e o que precisa acontecer quando
+    // a tela cai sem ninguem ter clicado em nada.
+    if let Some(motivo) = painel.motivo_da_parada() {
+        return Err(motivo.into());
+    }
+
     // O relatorio VOLTA, em vez de ser impresso aqui. O executavel e de
     // janela: println em interface grafica escreve para o nada, e foi para
     // isso que o painel existe.
@@ -663,6 +675,28 @@ pub async fn transmitir_na_sala(
         "{quadros} quadros, {enviados} pacotes de video, {pacotes_som} de som,          codificados no {}",
         if hardware { format!("{nome} (chip da placa)") } else { format!("{nome} (CPU)") }
     ))
+}
+
+/// Esta falha na batida de presenca acaba com a transmissao, ou da para
+/// insistir?
+///
+/// Sair da call enquanto transmite NAO e falha passageira: e o fim. O site ja
+/// apagou a presenca, quem assistia ja perdeu a imagem, e insistir so queima
+/// CPU codificando uma tela que nao chega a ninguem. A pagina do site ja
+/// parava sozinha nesse caso -- foi o que travava quem fechava o Discord com a
+/// tela no ar -- e o app ficava ate o teto de 12 HORAS tentando, com a captura
+/// viva e a janela escondida na bandeja.
+///
+/// Rede e outra coisa: cai e volta. O site segura a tela por 20 segundos sem
+/// batida, entao vale insistir em vez de derrubar quem teve um soluco de wi-fi.
+pub fn acaba_a_transmissao(erro: &crate::sala::Erro) -> Option<&'static str> {
+    match erro {
+        crate::sala::Erro::ForaDaCall => {
+            Some("saiste da call, entao a tela saiu do ar. Volta para a call e ica de novo.")
+        }
+        crate::sala::Erro::SemSessao => Some("a sessao venceu. Entra de novo e ica a tela."),
+        crate::sala::Erro::Rede(_) => None,
+    }
 }
 
 /// Quanto tempo uma oferta fica "no ar" antes de valer a pena oferecer de novo.
@@ -1011,5 +1045,30 @@ mod testes {
         let sobrou = um_quero_por_pessoa(caixa);
         let tipos: Vec<&str> = sobrou.iter().map(|s| s.tipo.as_str()).collect();
         assert_eq!(tipos, vec!["quero", "candidato", "resposta"]);
+    }
+
+    #[test]
+    fn sair_da_call_acaba_com_a_transmissao() {
+        // O defeito era este: o app seguia capturando e codificando ate o teto
+        // de 12 horas depois de a pessoa sair da call, com quem assistia ja
+        // sem imagem havia muito tempo.
+        let motivo = acaba_a_transmissao(&crate::sala::Erro::ForaDaCall);
+        assert!(motivo.is_some());
+        assert!(motivo.unwrap().contains("call"));
+    }
+
+    #[test]
+    fn sessao_vencida_tambem_acaba() {
+        // Sem sessao nao ha como provar ao site que a pessoa continua na call,
+        // entao a tela cai de qualquer jeito: melhor cair dizendo o porque.
+        assert!(acaba_a_transmissao(&crate::sala::Erro::SemSessao).is_some());
+    }
+
+    #[test]
+    fn soluco_de_rede_nao_derruba_quem_esta_no_ar() {
+        // O site segura a tela por 20 segundos sem batida. Derrubar no primeiro
+        // erro de rede tiraria do ar quem so piscou o wi-fi.
+        assert!(acaba_a_transmissao(&crate::sala::Erro::Rede("timeout".into())).is_none());
+        assert!(acaba_a_transmissao(&crate::sala::Erro::Rede("o site respondeu 502".into())).is_none());
     }
 }

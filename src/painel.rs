@@ -30,6 +30,13 @@ pub struct Painel {
     pessoas: AtomicUsize,
     /// A última linha de situação. Vai para a janela, não para o terminal.
     recado: Mutex<String>,
+    /// Por que a transmissão parou SOZINHA, quando não foi o botão.
+    ///
+    /// Sem isto, parada por conta própria e parada a pedido terminam iguais: a
+    /// função devolve o relatório de sempre e a pessoa vê "x quadros, y
+    /// pacotes" sem uma palavra sobre o motivo. A janela já sabe mostrar
+    /// problema e até se desesconder para isso — só faltava ter o que contar.
+    motivo: Mutex<Option<String>>,
     espelho: Arc<Espelho>,
 }
 
@@ -100,6 +107,27 @@ impl Painel {
 
     pub fn recado(&self) -> String {
         self.recado.lock().map(|r| r.clone()).unwrap_or_default()
+    }
+
+    /// Parar por conta própria, com o motivo junto.
+    ///
+    /// É o mesmo freio do botão: não mata nada, avisa. A diferença é que a
+    /// razão fica guardada, e quem termina a transmissão a devolve como erro
+    /// em vez de relatório.
+    pub fn parar_porque(&self, motivo: impl Into<String>) {
+        let motivo = motivo.into();
+        if let Ok(mut m) = self.motivo.lock() {
+            // O primeiro motivo manda: ele é a causa, o resto é consequência.
+            if m.is_none() {
+                *m = Some(motivo.clone());
+            }
+        }
+        self.dizer(motivo);
+        self.pedir_para_parar();
+    }
+
+    pub fn motivo_da_parada(&self) -> Option<String> {
+        self.motivo.lock().ok().and_then(|m| m.clone())
     }
 }
 
